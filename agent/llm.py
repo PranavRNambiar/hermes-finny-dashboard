@@ -3,13 +3,22 @@
 import os
 import anthropic
 
-MODEL      = "claude-sonnet-4-6"
-FAST_MODEL = "claude-sonnet-4-6"
+# Two tiers, split by task shape (see model eval, 2026-07-30):
+#   Sonnet — reasoning/narrative work: talking to Finny + digests.
+#   Haiku  — mechanical work: email parsing + merchant categorisation.
+# Haiku matched Sonnet on parser accuracy (both 100%) and was ~35-40% faster
+# and ~2.8x cheaper, so the extraction path runs on Haiku.
+SONNET = "claude-sonnet-4-6"
+HAIKU  = "claude-haiku-4-5"
 
-PARSER_MODEL     = MODEL
-DIGEST_MODEL     = MODEL
-CHAT_MODEL       = FAST_MODEL
-CATEGORISE_MODEL = FAST_MODEL
+# Back-compat aliases (MODEL/FAST_MODEL are imported directly by some modules).
+MODEL      = SONNET
+FAST_MODEL = HAIKU
+
+PARSER_MODEL     = HAIKU   # structured extraction from transaction emails
+CATEGORISE_MODEL = HAIKU   # merchant -> category classification
+DIGEST_MODEL     = SONNET  # daily/weekly digest — needs reasoning
+CHAT_MODEL       = SONNET  # conversation with Finny — needs reasoning
 
 
 def get_client() -> anthropic.Anthropic:
