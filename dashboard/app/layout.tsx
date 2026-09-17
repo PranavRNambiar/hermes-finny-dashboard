@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import localFont from "next/font/local";
+import AppShell from "@/components/AppShell";
 import "./globals.css";
 
 const geistSans = localFont({
@@ -16,6 +17,13 @@ const geistMono = localFont({
 export const metadata: Metadata = {
   title: "Finny",
   description: "Personal finance dashboard",
+  manifest: "/manifest.webmanifest",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: "Finny",
+  },
+  formatDetection: { telephone: false },
 };
 
 export default function RootLayout({
@@ -28,7 +36,7 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
-        {children}
+        <AppShell>{children}</AppShell>
       </body>
     </html>
   );

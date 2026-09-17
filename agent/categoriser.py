@@ -1,9 +1,12 @@
-"""Hermes 3 transaction categoriser via OpenRouter."""
+"""Transaction categoriser via Claude."""
 
 import logging
-from llm import get_client, PARSER_MODEL
+from llm import get_client, CATEGORISE_MODEL, cached_system
 
 log = logging.getLogger(__name__)
+
+# In-process cache: merchant → category (persists for the lifetime of the process)
+_merchant_cache: dict[str, str] = {}
 
 CATEGORIES = [
     "Food & Drink",
@@ -27,29 +30,59 @@ Categories (pick exactly one):
 Return ONLY the category name. No explanation."""
 
 
+def _lookup_existing_category(merchant: str) -> str | None:
+    """Return category from a previous transaction for the same merchant, if any."""
+    try:
+        from supabase import create_client
+        import os
+        db = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_SERVICE_KEY"])
+        result = (
+            db.table("transactions")
+            .select("category")
+            .eq("merchant", merchant)
+            .not_.eq("category", "Transfers & Misc")
+            .limit(1)
+            .execute()
+        )
+        if result.data:
+            return result.data[0]["category"]
+    except Exception:
+        pass
+    return None
+
+
 def categorise(merchant: str, raw_desc: str) -> str:
     """
-    Categorise a transaction using Hermes 3 via OpenRouter.
-    Falls back to 'Transfers & Misc' on API error.
+    Categorise a transaction using Claude.
+    Returns cached result for known merchants; falls back to 'Transfers & Misc' on API error.
     """
+    if merchant in _merchant_cache:
+        return _merchant_cache[merchant]
+
+    existing = _lookup_existing_category(merchant)
+    if existing:
+        _merchant_cache[merchant] = existing
+        return existing
+
     client = get_client()
     user_message = f"Merchant: {merchant}\nDescription: {raw_desc}"
 
     try:
-        response = client.chat.completions.create(
-            model=PARSER_MODEL,
+        response = client.messages.create(
+            model=CATEGORISE_MODEL,
             max_tokens=32,
+            system=cached_system(SYSTEM_PROMPT),
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_message},
             ],
         )
-        category = response.choices[0].message.content.strip()
+        category = response.content[0].text.strip()
         if category in CATEGORIES:
+            _merchant_cache[merchant] = category
             return category
-        # Handle case where model adds punctuation or extra text
         for c in CATEGORIES:
             if c.lower() in category.lower():
+                _merchant_cache[merchant] = c
                 return c
         log.warning("Model returned unknown category %r, using default", category)
         return "Transfers & Misc"

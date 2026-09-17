@@ -22,7 +22,7 @@ logging.basicConfig(level=logging.WARNING)
 
 from gmail_watch import fetch_body_and_msgid
 from db import is_processed, mark_processed, insert_transaction, update_recurring_patterns, get_merchant_tag, set_pending_tag, get_active_cards
-from parser import parse_transaction, SkipEmail
+from parser import parse_transaction, SkipEmail, is_paylah_sender
 from categoriser import categorise
 
 SGT = timezone(timedelta(hours=8))
@@ -73,26 +73,26 @@ def process_recent(server: IMAPClient, label: str, card: str, currency: str, day
         if fetched is None:
             fetch_failed += 1  # give up on this email for now; next scan/watcher retries it
             continue
-        body, _, subject = fetched
+        body, _, subject, sender = fetched
 
-        to_process.append((email_id, body, subject))
+        to_process.append((email_id, body, subject, sender))
 
     if not to_process:
         return {"saved": 0, "fetch_failed": fetch_failed, "parse_failed": 0}
 
     # Phase 2: parse + categorise in parallel (LLM calls are independent)
     def llm_process(item):
-        email_id, body, subject = item
+        email_id, body, subject, sender = item
         try:
-            parsed = parse_transaction(body, card, currency, subject=subject)
+            parsed = parse_transaction(body, card, currency, subject=subject, sender=sender)
         except SkipEmail:
-            return (email_id, None, None, "skip")
+            return (email_id, None, None, "skip", sender)
         except Exception:
-            return (email_id, None, None, "error")
+            return (email_id, None, None, "error", sender)
         if parsed is None:
-            return (email_id, None, None, "parse_failed")
+            return (email_id, None, None, "parse_failed", sender)
         category = categorise(parsed["merchant"] or "", parsed.get("raw_desc") or "")
-        return (email_id, parsed, category, "ok")
+        return (email_id, parsed, category, "ok", sender)
 
     with ThreadPoolExecutor(max_workers=LLM_WORKERS) as executor:
         results = list(executor.map(llm_process, to_process))
@@ -100,7 +100,7 @@ def process_recent(server: IMAPClient, label: str, card: str, currency: str, day
     # Phase 3: write to DB sequentially
     saved = 0
     parse_failed = 0
-    for email_id, parsed, category, status in results:
+    for email_id, parsed, category, status, sender in results:
         if status == "error":
             continue
         if status == "skip":
@@ -119,6 +119,8 @@ def process_recent(server: IMAPClient, label: str, card: str, currency: str, day
         try:
             merchant = parsed["merchant"] or ""
             known_tag = get_merchant_tag(merchant) if merchant else None
+            if not known_tag and is_paylah_sender(sender):
+                known_tag = "PayNow"
             if known_tag:
                 txn["user_tag"] = known_tag
             insert_transaction(txn)

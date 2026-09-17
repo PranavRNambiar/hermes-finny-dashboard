@@ -15,7 +15,7 @@ from email import policy
 from dotenv import load_dotenv
 from imapclient import IMAPClient
 
-from parser import parse_transaction, SkipEmail
+from parser import parse_transaction, SkipEmail, is_paylah_sender
 from merchant_intel import guess_merchant
 from categoriser import categorise
 from db import (
@@ -97,18 +97,19 @@ CARD_REFRESH_INTERVAL = 300  # seconds between checks for newly added cards
 SCAN_POLL_INTERVAL    = 15   # seconds between checks for dashboard scan requests
 
 
-def fetch_body_and_msgid(server: IMAPClient, uid: int) -> tuple[str, str, str]:
-    """Returns (body_text, message_id, subject).
+def fetch_body_and_msgid(server: IMAPClient, uid: int) -> tuple[str, str, str, str]:
+    """Returns (body_text, message_id, subject, sender).
     Falls back to HTML content (stripped of tags) when no text/plain part exists."""
     import html as _html
     import re as _re
     data = server.fetch([uid], ["RFC822"])
     if not data or uid not in data:
-        return "", "", ""
+        return "", "", "", ""
     raw = data[uid][b"RFC822"]
     msg = email.message_from_bytes(raw, policy=policy.default)
     message_id = (msg.get("Message-ID") or "").strip()
     subject = (msg.get("Subject") or "").strip()
+    sender = (msg.get("From") or "").strip()
     body = ""
     html_body = ""
     if msg.is_multipart():
@@ -136,7 +137,7 @@ def fetch_body_and_msgid(server: IMAPClient, uid: int) -> tuple[str, str, str]:
     if not body:
         payload = msg.get_payload(decode=True)
         body = payload.decode("utf-8", errors="replace") if payload else ""
-    return body, message_id, subject
+    return body, message_id, subject, sender
 
 
 def process_new_uids(server: IMAPClient, label: str, card: str, currency: str) -> int:
@@ -177,13 +178,13 @@ def process_new_uids(server: IMAPClient, label: str, card: str, currency: str) -
             continue
 
         try:
-            body, _, subject = fetch_body_and_msgid(server, uid)
+            body, _, subject, sender = fetch_body_and_msgid(server, uid)
         except Exception as exc:
             log.error("[%s] Fetch failed UID %s: %s", card.upper(), uid, exc)
             continue  # don't mark processed — retry on next wake
 
         try:
-            parsed = parse_transaction(body, card, currency, subject=subject)
+            parsed = parse_transaction(body, card, currency, subject=subject, sender=sender)
         except SkipEmail:
             log.info("[%s] Skipped non-transaction UID %s", card.upper(), uid)
             mark_processed(email_id, parse_failed=False)
@@ -213,6 +214,10 @@ def process_new_uids(server: IMAPClient, label: str, card: str, currency: str) -
         try:
             merchant = parsed["merchant"] or ""
             known_tag = get_merchant_tag(merchant) if merchant else None
+            if not known_tag and is_paylah_sender(sender):
+                # DBS PayLah! alerts are always PayNow sends — auto-tag deterministically,
+                # no need to ask (still filed under the "dbs" card/label).
+                known_tag = "PayNow"
             if known_tag:
                 txn["user_tag"] = known_tag
 
