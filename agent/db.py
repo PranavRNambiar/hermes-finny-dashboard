@@ -154,7 +154,8 @@ def insert_incoming(row: dict) -> str:
     owner set for this sender (incoming_rules) wins over the parser's guess."""
     db = get_client()
     try:
-        rule = db.table("incoming_rules").select("kind").eq("counterparty", row.get("counterparty") or "").limit(1).execute()
+        name = (row.get("counterparty") or "").replace("%", "").replace("_", "")
+        rule = db.table("incoming_rules").select("kind").ilike("counterparty", name).limit(1).execute()  # case-insensitive
         if rule.data:
             row["kind"] = rule.data[0]["kind"]
     except Exception:
