@@ -11,3 +11,4 @@ agent/token.json
 logs/
 ios/Finny.xcodeproj/
 ios/build/
+.claude/settings.local.json
