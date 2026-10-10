@@ -275,24 +275,29 @@ struct PillPicker<T: Hashable>: View {
 }
 
 struct CurrencyPicker: View {
-    let available: [String]
-    @Binding var selection: String
+    @Binding var mode: CurrencyMode
     var body: some View {
-        if available.count > 1 {
-            Menu {
-                Picker("Currency", selection: $selection) {
-                    ForEach(available, id: \.self) { Text("\(Money.symbol($0))  \($0)").tag($0) }
+        Menu {
+            Picker("Currency", selection: $mode) {
+                Section("Per card currency") {
+                    Text("S$  SGD only").tag(CurrencyMode.sgd)
+                    Text("₹  INR only").tag(CurrencyMode.inr)
                 }
-            } label: {
-                HStack(spacing: 4) {
-                    Text(selection).font(.system(size: 13, weight: .bold, design: .rounded))
-                    Image(systemName: "chevron.down").font(.system(size: 9, weight: .heavy))
+                Section("Everything, converted") {
+                    Text("All in S$").tag(CurrencyMode.allSGD)
+                    Text("All in ₹").tag(CurrencyMode.allINR)
                 }
-                .foregroundStyle(Palette.ink)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 7)
-                .background(Palette.surface, in: .capsule)
             }
+        } label: {
+            HStack(spacing: 4) {
+                if mode.isCombined { Image(systemName: "arrow.triangle.merge").font(.system(size: 10, weight: .bold)) }
+                Text(mode.label).font(.system(size: 13, weight: .bold, design: .rounded))
+                Image(systemName: "chevron.down").font(.system(size: 9, weight: .heavy))
+            }
+            .foregroundStyle(mode.isCombined ? Palette.surface : Palette.ink)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .background(mode.isCombined ? Palette.ink : Palette.surface, in: .capsule)
         }
     }
 }

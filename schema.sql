@@ -124,3 +124,13 @@ BEGIN
     EXECUTE format('REVOKE ALL ON TABLE public.%I FROM anon, authenticated', t.tablename);
   END LOOP;
 END $$;
+
+-- ── Merchant rules (custom names + category overrides) ──────
+CREATE TABLE IF NOT EXISTS merchant_rules (
+  merchant      TEXT PRIMARY KEY,              -- raw merchant as sent by the bank
+  display_name  TEXT,                          -- owner's custom name (applied at read time)
+  category      TEXT,                          -- category for all past + future transactions
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+ALTER TABLE merchant_rules ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE merchant_rules FROM anon, authenticated;

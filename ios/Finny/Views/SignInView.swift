@@ -51,7 +51,7 @@ struct SignInView: View {
                 .padding(.top, 6)
                 HStack(spacing: 6) {
                     Image(systemName: "lock.fill").font(.system(size: 10))
-                    Text("You'll enter your owner password on the next screen. Read-only access.")
+                    Text("You'll enter your owner password on the next screen.")
                 }
                 .font(.caption)
                 .foregroundStyle(Palette.muted)

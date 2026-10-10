@@ -53,7 +53,7 @@ final class Auth: NSObject {
             .init(name: "response_type", value: "code"),
             .init(name: "code_challenge", value: challenge),
             .init(name: "code_challenge_method", value: "S256"),
-            .init(name: "scope", value: "finny.read"),
+            .init(name: "scope", value: "finny.read finny.write"),
             .init(name: "state", value: state),
         ]
 

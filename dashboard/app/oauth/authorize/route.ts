@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { checkPassword, issueCode, issuer, lookupClient, SCOPES } from "@/lib/finny/auth";
+import { checkPassword, IOS_CLIENT_ID, issueCode, issuer, lookupClient } from "@/lib/finny/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -21,7 +21,7 @@ function read(src: URLSearchParams): Params {
     state: g("state"),
     code_challenge: g("code_challenge"),
     code_challenge_method: g("code_challenge_method") || "S256",
-    scope: g("scope") || SCOPES.join(" "),
+    scope: g("scope") || "finny.read",
     response_type: g("response_type"),
   };
 }
@@ -67,7 +67,7 @@ button{margin-top:14px;width:100%;height:54px;border:0;border-radius:16px;backgr
 </style></head><body><form class="wrap" method="post">
 <div class="brand">finny</div>
 <h1>Let ${esc(clientName)} in?</h1>
-<p class="sub">Read-only access to your transactions, spending and splits. It can look, not touch.</p>
+<p class="sub">${p.client_id === IOS_CLIENT_ID ? "Read your spending, and edit tags, categories and merchant names." : "Read-only access to your transactions, spending and splits. It can look, not touch."}</p>
 ${message ? `<div class="err">${esc(message)}</div>` : ""}
 ${hidden}
 <label class="eyebrow" for="pw">Owner password</label>

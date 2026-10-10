@@ -3,20 +3,21 @@ import SwiftUI
 
 struct HomeView: View {
     @Environment(Auth.self) private var auth
-    @AppStorage("currency") private var currency = "SGD"
+    @Environment(DataChanges.self) private var changes
+    @AppStorage("currencyMode") private var mode: CurrencyMode = .sgd
     @State private var period: Period = .this_month
     @State private var data: Overview?
     @State private var error: String?
 
+    private var currency: String { mode.currency }
     private var summary: CurrencySummary? { data?.currencies[currency] }
-    private var currencies: [String] { data?.currencies.keys.sorted() ?? [] }
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     ScreenHeader(eyebrow: Date.now.formatted(.dateTime.weekday(.wide).day().month(.wide)), title: "Overview") {
-                        CurrencyPicker(available: currencies, selection: $currency)
+                        CurrencyPicker(mode: $mode)
                     }
                     PillPicker(options: Period.allCases, selection: $period) { $0.short }
 
@@ -39,17 +40,19 @@ struct HomeView: View {
             .canvasBackground()
             .toolbar(.hidden, for: .navigationBar)
             .refreshable { await load() }
-            .task(id: period) { await load() }
+            .task(id: "\(period.rawValue)-\(mode.rawValue)-\(changes.version)") { await load() }
             .navigationDestination(for: Txn.self) { TransactionDetailView(txn: $0) }
         }
     }
 
     private func load() async {
         do {
-            let o = try await API(auth: auth).overview(period)
+            let o = try await API(auth: auth).overview(period, combine: mode.combine)
             withAnimation(.snappy) { data = o }
             error = nil
-            if o.currencies[currency] == nil, let first = o.currencies.keys.sorted().first { currency = first }
+            if !mode.isCombined, o.currencies[currency] == nil, o.currencies["INR"] != nil || o.currencies["SGD"] != nil {
+                mode = o.currencies["SGD"] != nil ? .sgd : .inr
+            }
         } catch {
             self.error = error.localizedDescription
         }
@@ -69,11 +72,17 @@ struct HomeView: View {
 
     private func hero(_ s: CurrencySummary, label: String) -> some View {
         VStack(alignment: .leading, spacing: 14) {
-            Eyebrow("Spent · \(label)", color: Palette.mint.opacity(0.9))
+            Eyebrow(mode.isCombined ? "Spent · \(label) · all cards" : "Spent · \(label)", color: Palette.mint.opacity(0.9))
             AmountText(amount: s.total, currency: currency, size: 46, weight: .bold, color: .white)
             Text(Quip.forChange(s.change_pct))
                 .font(.system(size: 15, weight: .medium, design: .rounded))
                 .foregroundStyle(.white.opacity(0.7))
+            if let c = data?.combined, let rate = c.fx_rate {
+                Label("SGD + INR combined at ₹\(rate.formatted(.number.precision(.fractionLength(2))))/S$ · \(c.fx_date ?? "")",
+                      systemImage: "arrow.triangle.merge")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.5))
+            }
 
             Chart(s.daily) { p in
                 BarMark(x: .value("Day", p.day, unit: .day), y: .value("Spend", p.total))
@@ -149,7 +158,7 @@ struct HomeView: View {
             VStack(spacing: 0) {
                 ForEach(Array(s.by_category.enumerated()), id: \.element.id) { i, c in
                     NavigationLink {
-                        FilteredTransactionsView(title: c.key, currency: currency, category: c.key, period: data?.period)
+                        FilteredTransactionsView(title: c.key, currency: mode.isCombined ? nil : currency, category: c.key, period: data?.period)
                     } label: {
                         HStack(spacing: 12) {
                             CategoryIcon(category: c.key, size: 36)

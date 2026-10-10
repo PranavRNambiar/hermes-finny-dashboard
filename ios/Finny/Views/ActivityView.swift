@@ -51,6 +51,7 @@ final class TxnFeed {
 
 struct ActivityView: View {
     @Environment(Auth.self) private var auth
+    @Environment(DataChanges.self) private var changes
     @State private var feed = TxnFeed()
     @State private var meta: Meta?
     @State private var showFilters = false
@@ -77,9 +78,9 @@ struct ActivityView: View {
                 FilterSheet(feed: feed, meta: meta) { reload() }
                     .presentationDetents([.medium, .large])
             }
-            .task {
-                if feed.items.isEmpty { await feed.reload(API(auth: auth)) }
-                if meta == nil { meta = try? await API(auth: auth).meta() }
+            .task(id: changes.version) {
+                await feed.reload(API(auth: auth))
+                meta = try? await API(auth: auth).meta()
             }
         }
     }
@@ -155,8 +156,9 @@ struct ActivityView: View {
 /// Transactions for one category within a period; opened from Overview.
 struct FilteredTransactionsView: View {
     @Environment(Auth.self) private var auth
+    @Environment(DataChanges.self) private var changes
     let title: String
-    let currency: String
+    let currency: String?
     let category: String
     let period: Overview.PeriodInfo?
     @State private var feed = TxnFeed()
@@ -178,7 +180,7 @@ struct FilteredTransactionsView: View {
         }
         .canvasBackground()
         .navigationBarTitleDisplayMode(.inline)
-        .task {
+        .task(id: changes.version) {
             feed.currency = currency
             feed.category = category
             feed.from = period?.from

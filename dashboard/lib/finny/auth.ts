@@ -110,13 +110,21 @@ export function checkPassword(candidate: string): boolean {
 
 const clientRef = (client_id: string) => createHash("sha256").update(client_id).digest("base64url").slice(0, 32);
 
+/** Scopes a client may hold: only the first-party iOS app can edit; everyone else reads. */
+export function grantedScope(client_id: string, requested: string): string {
+  const allowed = client_id === IOS_CLIENT_ID ? ["finny.read", "finny.write"] : ["finny.read"];
+  const asked = requested.split(/\s+/).filter(Boolean);
+  const granted = allowed.filter((s) => asked.includes(s));
+  return (granted.length ? granted : ["finny.read"]).join(" ");
+}
+
 export function issueCode(
   p: { client_id: string; redirect_uri: string; code_challenge: string; scope: string },
   iss: string
 ) {
   return sign(
     "code",
-    { cid: clientRef(p.client_id), redirect_uri: p.redirect_uri, cc: p.code_challenge, scope: p.scope },
+    { cid: clientRef(p.client_id), redirect_uri: p.redirect_uri, cc: p.code_challenge, scope: grantedScope(p.client_id, p.scope) },
     CODE_TTL_S,
     iss
   );
@@ -178,7 +186,7 @@ export function bearer(req: Request): string | undefined {
 
 // ── Discovery documents ────────────────────────────────────
 
-export const SCOPES = ["finny.read"];
+export const SCOPES = ["finny.read", "finny.write"];
 
 export function authServerMetadata(iss: string) {
   return {

@@ -3,6 +3,7 @@ import SwiftUI
 @main
 struct FinnyApp: App {
     @State private var auth = Auth()
+    @State private var changes = DataChanges()
 
     var body: some Scene {
         WindowGroup {
@@ -14,6 +15,7 @@ struct FinnyApp: App {
                 }
             }
             .environment(auth)
+            .environment(changes)
             .animation(.default, value: auth.isSignedIn)
         }
     }
@@ -29,4 +31,12 @@ struct RootTabs: View {
         }
         .tint(Palette.ink)
     }
+}
+
+/// Bumped after any edit so every screen reloads its data.
+@MainActor
+@Observable
+final class DataChanges {
+    var version = 0
+    func bump() { version += 1 }
 }

@@ -14,9 +14,15 @@ struct Txn: Decodable, Identifiable, Hashable {
     let anomaly_flagged: Bool
     let user_tag: String?
     let raw_desc: String?
+    let raw_merchant: String?
     let splits: [Split]?
 
-    var displayMerchant: String { (merchant?.nilIfEmpty).map(prettyMerchant) ?? "Unknown merchant" }
+    /// Custom names (set in the app) are shown exactly as typed; bank names get tidied.
+    var displayMerchant: String {
+        guard let m = merchant?.nilIfEmpty else { return "Unknown merchant" }
+        return isRenamed ? m : prettyMerchant(m)
+    }
+    var isRenamed: Bool { raw_merchant != nil && raw_merchant != merchant }
     var date: Date { DateFormatter.isoDay.date(from: txn_date) ?? .now }
 
     struct Split: Decodable, Hashable {
@@ -61,7 +67,13 @@ struct Overview: Decodable {
         let label: String
         let days: Int
     }
+    struct Combined: Decodable {
+        let currency: String
+        let fx_rate: Double?
+        let fx_date: String?
+    }
     let period: PeriodInfo
+    let combined: Combined?
     let currencies: [String: CurrencySummary]
     let anomalies: [Txn]
 }
@@ -136,6 +148,28 @@ struct Meta: Decodable {
     let tags: [Named]
     let fx: FX?
 }
+
+/// Which currency the screens show: one card currency, or everything converted into one.
+enum CurrencyMode: String, CaseIterable, Identifiable {
+    case sgd = "SGD", inr = "INR", allSGD = "ALL_SGD", allINR = "ALL_INR"
+    var id: String { rawValue }
+    var currency: String { self == .sgd || self == .allSGD ? "SGD" : "INR" }
+    var combine: String? { self == .allSGD ? "SGD" : self == .allINR ? "INR" : nil }
+    var isCombined: Bool { combine != nil }
+    var label: String {
+        switch self {
+        case .sgd: "SGD"
+        case .inr: "INR"
+        case .allSGD: "All in S$"
+        case .allINR: "All in ₹"
+        }
+    }
+}
+
+let allCategories = [
+    "Food & Drink", "Transport", "Shopping", "Subscriptions", "Health & Fitness", "Travel",
+    "Utilities & Bills", "Rent & Housing", "Entertainment", "Education", "Transfers & Misc",
+]
 
 enum Period: String, CaseIterable, Identifiable {
     case last_7_days, this_month, last_month, last_30_days, this_year

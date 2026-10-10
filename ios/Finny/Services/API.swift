@@ -5,8 +5,8 @@ import Foundation
 struct API {
     let auth: Auth
 
-    func overview(_ period: Period) async throws -> Overview {
-        try await get("overview", ["period": period.rawValue])
+    func overview(_ period: Period, combine: String? = nil) async throws -> Overview {
+        try await get("overview", ["period": period.rawValue, "combine": combine])
     }
 
     func transactions(query: String? = nil, currency: String? = nil, card: String? = nil,
@@ -19,16 +19,62 @@ struct API {
     }
 
     func transaction(id: String) async throws -> Txn {
-        try await get("transactions/\(id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id)", [:])
+        try await get("transactions/\(API.encodeID(id))", [:])
     }
 
-    func breakdown(groupBy: String, period: String? = nil, from: String? = nil, currency: String? = nil) async throws -> [String: Breakdown] {
-        try await get("breakdown", ["group_by": groupBy, "period": period, "from": from, "currency": currency])
+    func breakdown(groupBy: String, period: String? = nil, from: String? = nil, currency: String? = nil,
+                   combine: String? = nil) async throws -> [String: Breakdown] {
+        try await get("breakdown", ["group_by": groupBy, "period": period, "from": from, "currency": currency, "combine": combine])
+    }
+
+    /// Transaction ids are email message ids (may contain / < > @), so encode everything but unreserved chars.
+    static func encodeID(_ id: String) -> String {
+        id.addingPercentEncoding(withAllowedCharacters: CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~")) ?? id
+    }
+
+    // MARK: Edits
+
+    struct Ignored: Decodable {}
+
+    /// Tag and/or recategorise a transaction; `applyToMerchant` covers its merchant's past and future transactions.
+    func edit(transaction id: String, tag: String?? = nil, category: String? = nil, applyToMerchant: Bool) async throws {
+        var body: [String: Any] = ["apply_to_merchant": applyToMerchant]
+        if let tag { body["tag"] = tag ?? NSNull() }
+        if let category { body["category"] = category }
+        let _: Ignored = try await send("PATCH", "transactions/\(API.encodeID(id))", body)
+    }
+
+    /// Custom display name for a merchant (all past and future transactions). nil resets it.
+    func rename(merchant raw: String, to name: String?) async throws {
+        let _: Ignored = try await send("POST", "merchants/rename", ["merchant": raw, "display_name": name ?? NSNull()])
     }
 
     func splits() async throws -> Splits { try await get("splits", [:]) }
     func subscriptions() async throws -> [Subscription] { try await get("subscriptions", [:]) }
     func meta() async throws -> Meta { try await get("meta", [:]) }
+
+    private func send<T: Decodable>(_ method: String, _ path: String, _ body: [String: Any]) async throws -> T {
+        guard let base = auth.serverURL else { throw AuthError.signedOut }
+        for attempt in 0..<2 {
+            var req = URLRequest(url: base.appending(path: "api/v1/" + path))
+            req.httpMethod = method
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.setValue("Bearer \(try await auth.validAccessToken(forceRefresh: attempt > 0))", forHTTPHeaderField: "Authorization")
+            req.httpBody = try JSONSerialization.data(withJSONObject: body)
+            let (data, resp) = try await URLSession.shared.data(for: req)
+            let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            if status == 401 && attempt == 0 { continue }
+            if status == 403 {
+                throw AuthError.message("Editing needs a fresh sign-in. Go to Settings → Sign out, then sign in again.")
+            }
+            guard (200..<300).contains(status) else {
+                let msg = (try? JSONDecoder().decode([String: String].self, from: data))?["error"]
+                throw AuthError.message(msg ?? "Couldn't save (\(status)).")
+            }
+            return try JSONDecoder().decode(T.self, from: data)
+        }
+        throw AuthError.signedOut
+    }
 
     private func get<T: Decodable>(_ path: String, _ params: [String: String?]) async throws -> T {
         guard let base = auth.serverURL else { throw AuthError.signedOut }
