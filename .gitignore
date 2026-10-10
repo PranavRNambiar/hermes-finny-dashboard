@@ -9,3 +9,5 @@ dashboard/.env.local
 agent/credentials.json
 agent/token.json
 logs/
+ios/Finny.xcodeproj/
+ios/build/

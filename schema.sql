@@ -113,3 +113,14 @@ CREATE TABLE IF NOT EXISTS divide_session (
   updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CONSTRAINT divide_session_singleton CHECK (id = 1)
 );
+
+-- ── Lock down (see supabase_lockdown.sql) ───────────────────
+-- Only service_role (agent + dashboard server) may access these tables.
+DO $$
+DECLARE t record;
+BEGIN
+  FOR t IN SELECT tablename FROM pg_tables WHERE schemaname = 'public' LOOP
+    EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', t.tablename);
+    EXECUTE format('REVOKE ALL ON TABLE public.%I FROM anon, authenticated', t.tablename);
+  END LOOP;
+END $$;

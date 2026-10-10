@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "finny": {
+      "type": "http",
+      "url": "${FINNY_MCP_URL:-https://REPLACE-WITH-YOUR-DASHBOARD.vercel.app/api/mcp}"
+    }
+  }
+}

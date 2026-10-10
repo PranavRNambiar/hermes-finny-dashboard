@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getSupabase } from "@/lib/supabase";
 
 const INR_PER_SGD = 72;
 
@@ -67,12 +66,9 @@ export default function TagsPage() {
     if (period === "custom" && (!customFrom || !customTo)) return;
     setLoading(true);
 
-    getSupabase()
-      .from("transactions")
-      .select("user_tag, amount, currency")
-      .gte("txn_date", from)
-      .lte("txn_date", to)
-      .then(({ data }) => {
+    fetch(`/api/rows?from=${from}&to=${to}`)
+      .then((r) => r.json())
+      .then(({ rows: data }: { rows?: { user_tag: string | null; amount: number; currency: string }[] }) => {
         const map: Record<string, { sgd: number; inr: number; count: number }> = {};
         const untaggedBucket = { sgd: 0, inr: 0, count: 0 };
 

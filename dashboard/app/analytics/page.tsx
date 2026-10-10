@@ -5,7 +5,6 @@ import {
   AreaChart, Area, XAxis, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell,
 } from "recharts";
-import { getSupabase } from "@/lib/supabase";
 import { CATEGORY_COLORS } from "@/lib/categories";
 
 interface DailyTotal { date: string; total: number }
@@ -24,17 +23,17 @@ function CurrencyPanel({ currency, symbol, color, sub }: { currency: "SGD" | "IN
   const [byCard, setByCard] = useState<CardTotal[]>([]);
 
   useEffect(() => {
+    type Row = { txn_date: string; amount: number; card: string; category: string };
+    const rowsFrom = (from: string): Promise<{ data: Row[] }> =>
+      fetch(`/api/rows?from=${from}&currency=${currency}`)
+        .then((r) => r.json())
+        .then((j) => ({ data: j.rows ?? [] }));
     const today = new Date();
     const from = new Date(today); from.setDate(today.getDate() - 30);
     const fromStr = from.toISOString().split("T")[0];
     const firstOfMonth = new Date(today.getFullYear(), today.getMonth(), 1).toISOString().split("T")[0];
 
-    getSupabase()
-      .from("transactions")
-      .select("txn_date, amount")
-      .eq("currency", currency)
-      .gte("txn_date", fromStr)
-      .then(({ data }) => {
+    rowsFrom(fromStr).then(({ data }) => {
         const map: Record<string, number> = {};
         (data ?? []).forEach((r) => { map[r.txn_date] = (map[r.txn_date] ?? 0) + r.amount; });
         const result: DailyTotal[] = [];
@@ -46,12 +45,7 @@ function CurrencyPanel({ currency, symbol, color, sub }: { currency: "SGD" | "IN
         setDaily(result);
       });
 
-    getSupabase()
-      .from("transactions")
-      .select("amount, card")
-      .eq("currency", currency)
-      .gte("txn_date", firstOfMonth)
-      .then(({ data }) => {
+    rowsFrom(firstOfMonth).then(({ data }) => {
         const rows = data ?? [];
         setMtd(rows.reduce((s, r) => s + r.amount, 0));
         const cardMap: Record<string, number> = {};
@@ -59,12 +53,7 @@ function CurrencyPanel({ currency, symbol, color, sub }: { currency: "SGD" | "IN
         setByCard(Object.entries(cardMap).map(([card, total]) => ({ card, total })).sort((a, b) => b.total - a.total));
       });
 
-    getSupabase()
-      .from("transactions")
-      .select("category, amount")
-      .eq("currency", currency)
-      .gte("txn_date", firstOfMonth)
-      .then(({ data }) => {
+    rowsFrom(firstOfMonth).then(({ data }) => {
         const map: Record<string, number> = {};
         (data ?? []).forEach((r) => { map[r.category] = (map[r.category] ?? 0) + r.amount; });
         setCats(Object.entries(map).map(([category, total]) => ({ category, total })).sort((a, b) => b.total - a.total));

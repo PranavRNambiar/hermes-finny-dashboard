@@ -4,7 +4,6 @@ import { useEffect, useState, useMemo, useRef } from "react";
 import Link from "next/link";
 import { AreaChart, Area, XAxis, Tooltip, ResponsiveContainer } from "recharts";
 import { CATEGORY_COLORS, CATEGORIES, cardBadgeClass } from "@/lib/categories";
-import { getSupabase } from "@/lib/supabase";
 import { DownloadIcon, XIcon, ArrowUpRightIcon, ChevronRightIcon, TagIcon, EyeIcon, EyeOffIcon } from "@/components/Icons";
 
 interface Transaction {
@@ -110,11 +109,9 @@ function SpendingChart({ mode, rate }: { mode: CombineMode; rate: number }) {
     from.setDate(from.getDate() - 13);
     const fromStr = from.toISOString().split("T")[0];
 
-    getSupabase()
-      .from("transactions")
-      .select("txn_date, amount, currency")
-      .gte("txn_date", fromStr)
-      .then(({ data: rows }) => {
+    fetch(`/api/rows?from=${fromStr}`)
+      .then((r) => r.json())
+      .then(({ rows }: { rows?: { txn_date: string; amount: number; currency: string }[] }) => {
         const map: Record<string, { sgd: number; inr: number }> = {};
         (rows ?? []).forEach((r) => {
           if (!map[r.txn_date]) map[r.txn_date] = { sgd: 0, inr: 0 };

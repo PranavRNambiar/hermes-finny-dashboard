@@ -66,6 +66,11 @@ function SettingsSheet({ onClose }: { onClose: () => void }) {
             />
           </button>
         </div>
+        <form method="post" action="/api/auth/logout" className="pt-4">
+          <button type="submit" className="w-full rounded-xl py-2.5 text-sm font-medium text-red-600 hover:bg-red-50">
+            Sign out
+          </button>
+        </form>
       </div>
     </div>
   );
@@ -156,6 +161,10 @@ function HeaderScanButton() {
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [settingsOpen, setSettingsOpen] = useState(false);
+
+  if (pathname === "/login") {
+    return <div className="min-h-screen bg-[#F6F6F9] px-4">{children}</div>;
+  }
 
   return (
     <div className="min-h-screen bg-[#F6F6F9]">
