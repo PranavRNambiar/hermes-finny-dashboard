@@ -38,7 +38,7 @@ def main(days: int) -> None:
     import os
     seen = known_ids("transactions") | known_ids("incoming")
     since = (datetime.now(SGT) - timedelta(days=days)).strftime("%d-%b-%Y")
-    found = 0
+    found = failed = 0
     with IMAPClient("imap.gmail.com", ssl=True) as server:
         server.login(os.environ["GMAIL_ADDRESS"], os.environ["GMAIL_APP_PASSWORD"])
         server.select_folder("[Gmail]/All Mail", readonly=True)
@@ -50,15 +50,18 @@ def main(days: int) -> None:
                 email_id = f"msgid:{mid}" if mid else f"{c['label']}:{uid}"
                 if email_id in seen:
                     continue
-                body, _, subject, sender, sent = fetch_body_and_msgid(server, uid)
                 try:
+                    body, _, subject, sender, sent = fetch_body_and_msgid(server, uid)
                     parsed = parse_transaction(body, c["card"], c["currency"], subject=subject, sender=sender, sent=sent)
+                    if parsed and parsed.get("direction") == "in":
+                        save_incoming(email_id, c["card"], parsed, notify=False)
+                        found += 1
                 except SkipEmail:
                     continue
-                if parsed and parsed.get("direction") == "in":
-                    save_incoming(email_id, c["card"], parsed, notify=False)
-                    found += 1
-    log.info("Backfill done: %d incoming rows recorded over the last %d days", found, days)
+                except Exception as exc:  # one bad email (fetch/LLM/DB hiccup) shouldn't stop the run
+                    failed += 1
+                    log.warning("[%s] Skipped UID %s: %s", c["card"].upper(), uid, exc)
+    log.info("Backfill done: %d incoming rows recorded, %d emails failed, over the last %d days", found, failed, days)
 
 
 if __name__ == "__main__":
