@@ -55,16 +55,22 @@ struct ActivityView: View {
     @State private var feed = TxnFeed()
     @State private var meta: Meta?
     @State private var showFilters = false
+    @State private var side = "Spent"
     @FocusState private var searching: Bool
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    ScreenHeader(eyebrow: "\(feed.total) transactions", title: "Activity")
-                    searchField
-                    filterChips
-                    TxnSections(feed: feed)
+                    ScreenHeader(eyebrow: side == "Spent" ? "\(feed.total) transactions" : "Money in", title: "Activity")
+                    PillPicker(options: ["Spent", "Received"], selection: $side) { $0 }
+                    if side == "Spent" {
+                        searchField
+                        filterChips
+                        TxnSections(feed: feed)
+                    } else {
+                        IncomingSection()
+                    }
                 }
                 .padding(.horizontal, 16)
                 .padding(.bottom, 24)
@@ -266,6 +272,11 @@ struct TransactionRow: View {
                     }
                 }
                 Text(subtitle).font(.system(size: 12, design: .rounded)).foregroundStyle(Palette.muted).lineLimit(1)
+                if txn.isSplit {
+                    Label("your share of \(Money.format(txn.fullAmount, txn.currency))", systemImage: "person.2.fill")
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Palette.mint)
+                }
             }
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 4) {
@@ -371,6 +382,163 @@ struct WrapLayout: Layout {
             s.place(at: CGPoint(x: x, y: y), proposal: .unspecified)
             x += sz.width + spacing
             row = max(row, sz.height)
+        }
+    }
+}
+
+// MARK: - Money in
+
+struct IncomingSection: View {
+    @Environment(Auth.self) private var auth
+    @Environment(DataChanges.self) private var changes
+    @State private var period: Period = .this_month
+    @State private var items: [Incoming] = []
+    @State private var loading = true
+    @State private var editing: Incoming?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            PillPicker(options: Period.allCases, selection: $period) { $0.short }
+            if loading {
+                ProgressView().tint(Palette.ink).frame(maxWidth: .infinity).padding(.vertical, 40)
+            } else if items.isEmpty {
+                VStack(spacing: 8) {
+                    Text("💸").font(.system(size: 40))
+                    Text("Nothing came in").font(.display(18)).foregroundStyle(Palette.ink)
+                    Text("Salary, PayNow received, refunds and top-ups appear here as their alerts arrive.")
+                        .font(.subheadline).foregroundStyle(Palette.inkSoft).multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity).padding(.vertical, 40)
+            } else {
+                totals
+                VStack(spacing: 0) {
+                    ForEach(items) { i in
+                        Button { editing = i } label: { IncomingRow(item: i) }.buttonStyle(.plain)
+                        if i.id != items.last?.id { Perforation().padding(.leading, 52) }
+                    }
+                }
+                .card(padding: 14)
+            }
+        }
+        .task(id: "\(period.rawValue)-\(changes.version)") {
+            loading = items.isEmpty
+            items = (try? await API(auth: auth).incoming(period: period)) ?? []
+            loading = false
+        }
+        .sheet(item: $editing) { i in IncomingKindSheet(item: i) }
+    }
+
+    private var totals: some View {
+        let income = items.filter { $0.kind != "own_transfer" }
+        let byCcy = Dictionary(grouping: income, by: \.currency).mapValues { $0.reduce(0) { $0 + $1.amount } }
+        return HStack(spacing: 12) {
+            ForEach(byCcy.keys.sorted(), id: \.self) { c in
+                VStack(alignment: .leading, spacing: 2) {
+                    Eyebrow("Received · \(c)")
+                    AmountText(amount: byCcy[c] ?? 0, currency: c, size: 26, weight: .bold, color: Palette.mint)
+                }
+                .card(padding: 14)
+            }
+        }
+    }
+}
+
+struct IncomingRow: View {
+    let item: Incoming
+    var body: some View {
+        let kind = IncomingKind(rawValue: item.kind) ?? .transfer
+        HStack(spacing: 12) {
+            Image(systemName: kind.symbol)
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(Palette.mint)
+                .frame(width: 40, height: 40)
+                .background(Palette.mintSoft, in: .rect(cornerRadius: 13, style: .continuous))
+            VStack(alignment: .leading, spacing: 3) {
+                Text(item.name).font(.system(size: 15, weight: .semibold, design: .rounded)).foregroundStyle(Palette.ink).lineLimit(1)
+                Text("\(kind.label) · \(item.date.formatted(.dateTime.day().month(.abbreviated))) · \(Theme.cardLabel(item.card))")
+                    .font(.system(size: 12, design: .rounded)).foregroundStyle(Palette.muted)
+            }
+            Spacer()
+            HStack(alignment: .firstTextBaseline, spacing: 1) {
+                Text("+").font(.system(size: 15, weight: .bold, design: .rounded)).foregroundStyle(kind == .own_transfer ? Palette.muted : Palette.mint)
+                AmountText(amount: item.amount, currency: item.currency, size: 16, color: kind == .own_transfer ? Palette.muted : Palette.mint)
+            }
+        }
+        .padding(.vertical, 10)
+        .contentShape(.rect)
+    }
+}
+
+private struct IncomingKindSheet: View {
+    @Environment(Auth.self) private var auth
+    @Environment(DataChanges.self) private var changes
+    @Environment(\.dismiss) private var dismiss
+    let item: Incoming
+    @State private var kind: IncomingKind = .transfer
+    @State private var always = true
+    @State private var error: String?
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Eyebrow("From \(item.name)")
+                        AmountText(amount: item.amount, currency: item.currency, size: 36, weight: .bold, color: Palette.mint)
+                    }
+                    VStack(spacing: 0) {
+                        ForEach(IncomingKind.allCases) { k in
+                            Button { kind = k } label: {
+                                HStack(spacing: 12) {
+                                    Image(systemName: k.symbol).foregroundStyle(Palette.mint).frame(width: 28)
+                                    VStack(alignment: .leading, spacing: 1) {
+                                        Text(k.label).font(.system(size: 15, weight: .semibold, design: .rounded)).foregroundStyle(Palette.ink)
+                                        if k == .own_transfer {
+                                            Text("Moving your own money, not counted as income").font(.caption).foregroundStyle(Palette.muted)
+                                        }
+                                    }
+                                    Spacer()
+                                    if kind == k { Image(systemName: "checkmark.circle.fill").foregroundStyle(Palette.mint).font(.system(size: 20)) }
+                                }
+                                .padding(.vertical, 10).contentShape(.rect)
+                            }
+                            .buttonStyle(.plain)
+                            if k != IncomingKind.allCases.last { Perforation().padding(.leading, 40) }
+                        }
+                    }
+                    .card(padding: 14)
+                    Toggle(isOn: $always) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Always for \(item.name)").font(.system(size: 15, weight: .semibold, design: .rounded)).foregroundStyle(Palette.ink)
+                            Text("Past and future money from them").font(.caption).foregroundStyle(Palette.muted)
+                        }
+                    }
+                    .tint(Palette.mint)
+                    .card(padding: 16)
+                    if let error { Text(error).font(.footnote).foregroundStyle(Palette.coral) }
+                    Button("Save") { save() }.buttonStyle(InkButtonStyle())
+                }
+                .padding(20)
+            }
+            .canvasBackground()
+            .navigationTitle("What was this?")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) { Button("Save") { save() }.fontWeight(.bold) }
+            }
+        }
+        .presentationDetents([.large])
+        .onAppear { kind = IncomingKind(rawValue: item.kind) ?? .transfer }
+    }
+
+    private func save() {
+        Task {
+            do {
+                try await API(auth: auth).setIncomingKind(id: item.id, kind: kind.rawValue, applyToSender: always)
+                changes.bump()
+                dismiss()
+            } catch { self.error = error.localizedDescription }
         }
     }
 }

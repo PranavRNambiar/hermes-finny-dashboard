@@ -23,6 +23,10 @@ export type Txn = {
   user_tag: string | null;
   /** Merchant as the bank sent it; `merchant` may be the owner's custom name. */
   raw_merchant: string | null;
+  /** Full charge on the card. `amount` is the owner's share (total minus what others owe). */
+  total_amount: number;
+  /** Number of other people this was split with (0 = not split). */
+  split_with: number;
 };
 
 export type TxnFilters = {
@@ -136,6 +140,30 @@ async function syncRuleCategories() {
   }
 }
 
+// ── Splits: what others owe on each transaction ───────────
+// Cached like rules; edits call resetSplits(). Settled and pending both count —
+// once someone owes you their part, it was never your spending.
+
+let _owed: Map<string, { total: number; people: number }> = new Map();
+let _owedAt = 0;
+
+async function ensureSplits() {
+  if (Date.now() - _owedAt < 30_000) return;
+  const next = new Map<string, { total: number; people: number }>();
+  for (let off = 0; ; off += 1000) {
+    const { data, error } = await db().from("transaction_splits").select("transaction_id, share_amount").range(off, off + 999);
+    if (error) break;
+    for (const r of data ?? []) {
+      const cur = next.get(r.transaction_id) ?? { total: 0, people: 0 };
+      next.set(r.transaction_id, { total: cur.total + Number(r.share_amount), people: cur.people + 1 });
+    }
+    if (!data || data.length < 1000) break;
+  }
+  _owed = next;
+  _owedAt = Date.now();
+}
+const resetSplits = () => { _owedAt = 0; };
+
 /** Raw merchants whose custom name matches the search text. */
 function merchantsNamed(q: string): string[] {
   const needle = q.toLowerCase();
@@ -166,7 +194,7 @@ function applyFilters<Q extends { eq: any; gte: any; lte: any; ilike: any }>(q: 
 export async function listTransactions(
   f: TxnFilters & { limit?: number; offset?: number; sort?: "date_desc" | "date_asc" | "amount_desc" }
 ): Promise<{ transactions: Txn[]; total: number }> {
-  await ensureRules();
+  await Promise.all([ensureRules(), ensureSplits()]);
   const limit = Math.min(200, Math.max(1, f.limit ?? 50));
   const offset = Math.max(0, f.offset ?? 0);
   let q = db().from("transactions").select(TXN_COLUMNS, { count: "exact" });
@@ -183,7 +211,7 @@ export async function listTransactions(
 
 /** Every matching row, paged past PostgREST's 1000-row cap. For aggregation only. */
 async function fetchAll(f: TxnFilters): Promise<Txn[]> {
-  await ensureRules();
+  await Promise.all([ensureRules(), ensureSplits()]);
   const out: Txn[] = [];
   const page = 1000;
   for (let offset = 0; ; offset += page) {
@@ -198,7 +226,7 @@ async function fetchAll(f: TxnFilters): Promise<Txn[]> {
 }
 
 export async function getTransaction(id: string): Promise<(Txn & { splits: any[] }) | null> {
-  await ensureRules();
+  await Promise.all([ensureRules(), ensureSplits()]);
   const { data, error } = await db()
     .from("transactions")
     .select(`${TXN_COLUMNS}, raw_desc`)
@@ -208,11 +236,13 @@ export async function getTransaction(id: string): Promise<(Txn & { splits: any[]
   if (!data) return null;
   const { data: splits } = await db()
     .from("transaction_splits")
-    .select("id, share_amount, currency, status, settled_at, people(name)")
+    .select("id, share_amount, currency, status, settled_at, people(id, name)")
     .eq("transaction_id", id);
   return {
     ...cleanTxn(data),
     splits: (splits ?? []).map((s: any) => ({
+      split_id: s.id,
+      person_id: s.people?.id ?? null,
       person: s.people?.name ?? null,
       share_amount: s.share_amount,
       currency: s.currency,
@@ -225,12 +255,17 @@ export async function getTransaction(id: string): Promise<(Txn & { splits: any[]
 function cleanTxn(row: any): Txn {
   const tag = row.user_tag as string | null;
   const rule = row.merchant ? _rules.get(row.merchant) : undefined;
+  const owed = _owed.get(row.id);
+  const total = Number(row.amount);
   return {
     ...row,
     raw_merchant: row.merchant,
     merchant: rule?.display_name || row.merchant,
     category: rule?.category || row.category,
     user_tag: tag && !tag.startsWith("__") ? tag : null,
+    total_amount: total,
+    amount: owed ? Math.max(0, round2(total - owed.total)) : total,
+    split_with: owed?.people ?? 0,
   };
 }
 
@@ -353,9 +388,23 @@ export async function overview(period: Period = "this_month", combine?: Combine)
     };
   }
 
+  // Money in for the same window (own transfers/top-ups are shown but not counted as income).
+  let inRows = await fetchIncoming({ from: range.from, to: range.to });
+  if (combine) inRows = (await convertRows(inRows as any, combine)).rows as any;
+  const cash_flow: Record<string, any> = {};
+  for (const ccy of new Set([...Object.keys(currencies), ...inRows.map((r) => r.currency)])) {
+    const ins = inRows.filter((r) => r.currency === ccy && r.kind !== "own_transfer");
+    const by_kind: Record<string, number> = {};
+    for (const r of ins) by_kind[r.kind] = round2((by_kind[r.kind] ?? 0) + r.amount);
+    const inTotal = round2(ins.reduce((a, b) => a + b.amount, 0));
+    const outTotal = currencies[ccy]?.total ?? 0;
+    cash_flow[ccy] = { in_total: inTotal, out_total: outTotal, net: round2(inTotal - outTotal), in_by_kind: by_kind, in_count: ins.length };
+  }
+
   return {
     period: { name: period, ...range, days },
     combined: combine ? { currency: combine, fx_rate: fx?.rate, fx_date: fx?.date } : null,
+    cash_flow,
     currencies,
     anomalies: rows.filter((r) => r.anomaly_flagged).slice(-10),
   };
@@ -373,7 +422,7 @@ export async function pendingSplits() {
     const person = row.people as any;
     const txn = row.transactions as any;
     const key = `${person?.id}:${row.currency}`;
-    const entry = byKey.get(key) ?? { name: person?.name ?? "Unknown", currency: row.currency, total: 0, items: [] };
+    const entry = byKey.get(key) ?? { person_id: person?.id ?? null, name: person?.name ?? "Unknown", currency: row.currency, total: 0, items: [] };
     entry.total = round2(entry.total + row.share_amount);
     entry.items.push({
       split_id: row.id,
@@ -519,4 +568,103 @@ async function upsertRule(merchant: string, patch: Partial<Rule>) {
     );
   }
   _rules.set(merchant, { display_name: next.display_name, category: next.category });
+}
+
+// ── Splits (edit) ──────────────────────────────────────────
+
+async function personId(name: string): Promise<number> {
+  const clean = name.trim().replace(/\s+/g, " ");
+  const { data, error } = await db().from("people").select("id, name, aliases");
+  if (error) throw new Error(error.message);
+  const key = clean.toLowerCase();
+  const hit = (data ?? []).find(
+    (p: any) => p.name.toLowerCase() === key || (p.aliases ?? []).some((a: string) => a.toLowerCase() === key)
+  );
+  if (hit) return hit.id;
+  const ins = await db().from("people").insert({ name: clean }).select("id").single();
+  if (ins.error) throw new Error(ins.error.message);
+  return ins.data.id;
+}
+
+export async function listPeople() {
+  const { data, error } = await db().from("people").select("id, name").order("name");
+  if (error) throw new Error(error.message);
+  return data ?? [];
+}
+
+/** Replace the unsettled splits on a transaction. Settled ones are kept as history. */
+export async function setSplits(transactionId: string, splits: { name: string; amount: number }[]) {
+  const { data: txn, error } = await db().from("transactions").select("id, amount, currency").eq("id", transactionId).maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!txn) throw new Error("transaction not found");
+  const { data: settled } = await db().from("transaction_splits").select("share_amount").eq("transaction_id", transactionId).eq("status", "settled");
+  const settledTotal = (settled ?? []).reduce((a: number, r: any) => a + Number(r.share_amount), 0);
+  const clean = splits.filter((s) => s.name?.trim() && Number(s.amount) > 0).map((s) => ({ name: s.name, amount: round2(Number(s.amount)) }));
+  const owed = clean.reduce((a, s) => a + s.amount, 0) + settledTotal;
+  if (owed > Number(txn.amount) + 0.01) throw new Error("Others can't owe more than the total");
+
+  const rows = [];
+  for (const s of clean) rows.push({ transaction_id: transactionId, person_id: await personId(s.name), currency: txn.currency, share_amount: s.amount });
+  const del = await db().from("transaction_splits").delete().eq("transaction_id", transactionId).eq("status", "pending");
+  if (del.error) throw new Error(del.error.message);
+  if (rows.length) {
+    const ins = await db().from("transaction_splits").insert(rows);
+    if (ins.error) throw new Error(ins.error.message);
+  }
+  resetSplits();
+  return { total: Number(txn.amount), owed_by_others: round2(owed), my_share: round2(Number(txn.amount) - owed), people: clean.length };
+}
+
+/** Mark everything a person owes (in one currency) as paid back. */
+export async function settlePerson(personId: number, currency: string) {
+  const { data, error } = await db()
+    .from("transaction_splits")
+    .update({ status: "settled", settled_at: new Date().toISOString() })
+    .eq("person_id", personId)
+    .eq("currency", currency)
+    .eq("status", "pending")
+    .select("id");
+  if (error) throw new Error(error.message);
+  return { settled: data?.length ?? 0 };
+}
+
+// ── Money in ───────────────────────────────────────────────
+
+export type Incoming = {
+  id: string; card: string; currency: string; amount: number; counterparty: string | null;
+  kind: "salary" | "transfer" | "refund" | "own_transfer"; txn_date: string; txn_time: string | null;
+};
+export const INCOMING_KINDS = ["salary", "transfer", "refund", "own_transfer"] as const;
+
+async function fetchIncoming(f: { from?: string; to?: string; currency?: string; kind?: string }): Promise<Incoming[]> {
+  let q = db().from("incoming").select("id, card, currency, amount, counterparty, kind, txn_date, txn_time");
+  if (f.from) q = q.gte("txn_date", f.from);
+  if (f.to) q = q.lte("txn_date", f.to);
+  if (f.currency) q = q.eq("currency", f.currency);
+  if (f.kind) q = q.eq("kind", f.kind);
+  const { data, error } = await q.order("txn_date", { ascending: false }).limit(2000);
+  return error ? [] : ((data ?? []) as Incoming[]); // table missing before migration → no income yet
+}
+
+export async function listIncoming(f: { from?: string; to?: string; currency?: string; kind?: string }) {
+  const rows = await fetchIncoming(f);
+  return { incoming: rows, total: rows.length };
+}
+
+/** Change what kind of money-in this is; optionally for everything from this sender, now and in future. */
+export async function setIncomingKind(id: string, kind: string, applyToCounterparty: boolean) {
+  if (!(INCOMING_KINDS as readonly string[]).includes(kind)) throw new Error("unknown kind");
+  const { data: row, error } = await db().from("incoming").select("counterparty").eq("id", id).maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!row) throw new Error("not found");
+  if (applyToCounterparty && row.counterparty) {
+    const r1 = await db().from("incoming_rules").upsert({ counterparty: row.counterparty, kind, updated_at: new Date().toISOString() }, { onConflict: "counterparty" });
+    if (r1.error) throw new Error(r1.error.message);
+    const r2 = await db().from("incoming").update({ kind }).eq("counterparty", row.counterparty);
+    if (r2.error) throw new Error(r2.error.message);
+  } else {
+    const r = await db().from("incoming").update({ kind }).eq("id", id);
+    if (r.error) throw new Error(r.error.message);
+  }
+  return { kind, counterparty: row.counterparty, all: applyToCounterparty };
 }

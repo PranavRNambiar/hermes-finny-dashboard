@@ -10,7 +10,7 @@ struct TransactionDetailView: View {
     @State private var toast: String?
 
     enum EditSheet: String, Identifiable {
-        case tag, category, rename
+        case tag, category, rename, split
         var id: String { rawValue }
     }
 
@@ -34,6 +34,11 @@ struct TransactionDetailView: View {
                         Text("Bank name: \(raw)").font(.system(size: 11, design: .monospaced)).foregroundStyle(Palette.muted)
                     }
                     AmountText(amount: t.amount, currency: t.currency, size: 48, weight: .bold)
+                    if t.isSplit {
+                        Text("Your share · \(Money.format(t.fullAmount, t.currency)) total, split with \(t.split_with ?? 0)")
+                            .font(.system(size: 13, weight: .semibold, design: .rounded))
+                            .foregroundStyle(Palette.mint)
+                    }
                     Button { sheet = .category } label: {
                         HStack(spacing: 4) {
                             CategoryTag(category: t.category)
@@ -70,14 +75,15 @@ struct TransactionDetailView: View {
                 .frame(maxWidth: .infinity)
                 .background(ReceiptEdge(radius: 28).fill(Palette.surface))
 
-                HStack(spacing: 10) {
+                HStack(spacing: 8) {
+                    action("Split", "person.2.fill") { sheet = .split }
                     action("Tag", "number") { sheet = .tag }
                     action("Category", "square.grid.2x2") { sheet = .category }
                     action("Rename", "character.cursor.ibeam") { sheet = .rename }
                 }
 
                 if let splits = t.splits, !splits.isEmpty {
-                    Card(title: "Split with") {
+                    Card(title: "Split with", trailing: "you: \(Money.format(t.amount, t.currency))") {
                         ForEach(splits, id: \.self) { s in
                             HStack {
                                 Text(s.person ?? "—").font(.system(size: 15, weight: .semibold, design: .rounded)).foregroundStyle(Palette.ink)
@@ -120,6 +126,9 @@ struct TransactionDetailView: View {
             } }
             case .category: CategorySheet(txn: t) { cat, all in await save(all ? "All \(t.displayMerchant) transactions are now \(cat)" : "Category updated") {
                 try await API(auth: auth).edit(transaction: t.id, category: cat, applyToMerchant: all)
+            } }
+            case .split: SplitSheet(txn: t) { splits in await save(splits.isEmpty ? "Split removed" : "Split saved · your share updated") {
+                try await API(auth: auth).setSplits(transaction: t.id, splits)
             } }
             case .rename: RenameSheet(txn: t) { name in await save(name == nil ? "Name reset" : "Renamed everywhere, past and future") {
                 try await API(auth: auth).rename(merchant: t.raw_merchant ?? t.merchant ?? "", to: name)
@@ -316,6 +325,127 @@ private struct CategorySheet: View {
             .card(padding: 14)
         }
         .onAppear { category = txn.category }
+    }
+}
+
+private struct SplitSheet: View {
+    @Environment(Auth.self) private var auth
+    let txn: Txn
+    let onSave: ([(name: String, amount: Double)]) async -> String?
+
+    struct Row: Identifiable { let id = UUID(); var name = ""; var amount = "" }
+    @State private var rows: [Row] = []
+    @State private var people: [Person] = []
+    @State private var unused = false
+    @FocusState private var focus: UUID?
+
+    private var total: Double { txn.fullAmount }
+    private var owed: Double { rows.compactMap { Double($0.amount.replacingOccurrences(of: ",", with: "")) }.reduce(0, +) }
+    private var myShare: Double { total - owed }
+    private var valid: [(name: String, amount: Double)] {
+        rows.compactMap { r in
+            guard let a = Double(r.amount.replacingOccurrences(of: ",", with: "")), a > 0, !r.name.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+            return (r.name.trimmingCharacters(in: .whitespaces), a)
+        }
+    }
+
+    var body: some View {
+        EditSheetFrame(title: "Split bill", merchant: txn.displayMerchant, applyAll: $unused, showApplyAll: false,
+                       saveTitle: rows.allSatisfy({ $0.name.isEmpty && $0.amount.isEmpty }) ? "Remove split" : "Save split",
+                       onSave: {
+                           if myShare < -0.005 { return "Others can't owe more than the total." }
+                           if rows.contains(where: { $0.name.trimmingCharacters(in: .whitespaces).isEmpty && (Double($0.amount) ?? 0) > 0 }) {
+                               return "Add a name for everyone who owes you."
+                           }
+                           return await onSave(valid)
+                       }) {
+            VStack(alignment: .leading, spacing: 4) {
+                Eyebrow("Your share")
+                AmountText(amount: max(0, myShare), currency: txn.currency, size: 40, weight: .bold,
+                           color: myShare < -0.005 ? Palette.coral : Palette.ink)
+                Text("of \(Money.format(total, txn.currency)) total · only your share counts in your spending")
+                    .font(.caption).foregroundStyle(Palette.muted)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Eyebrow("Split equally")
+                HStack(spacing: 8) {
+                    ForEach(2...6, id: \.self) { n in
+                        Button { splitEqually(n) } label: {
+                            Text("÷\(n)").font(.system(size: 14, weight: .bold, design: .rounded))
+                                .foregroundStyle(Palette.ink)
+                                .frame(maxWidth: .infinity, minHeight: 36)
+                                .background(Palette.surface, in: .capsule)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                Text("Counts you in: ÷3 means you + 2 others.").font(.caption2).foregroundStyle(Palette.muted)
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                Eyebrow("Who owes you")
+                ForEach($rows) { $row in
+                    HStack(spacing: 8) {
+                        TextField("Name", text: $row.name)
+                            .font(.system(size: 16, weight: .semibold, design: .rounded))
+                            .textInputAutocapitalization(.words)
+                            .focused($focus, equals: row.id)
+                        Text(Money.symbol(txn.currency)).foregroundStyle(Palette.muted)
+                        TextField("0.00", text: $row.amount)
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.trailing)
+                            .font(.system(size: 16, weight: .semibold, design: .rounded).monospacedDigit())
+                            .frame(width: 90)
+                        Button { rows.removeAll { $0.id == row.id } } label: {
+                            Image(systemName: "minus.circle.fill").foregroundStyle(Palette.muted)
+                        }
+                    }
+                    .padding(.horizontal, 14)
+                    .frame(height: 50)
+                    .background(Palette.surface, in: .rect(cornerRadius: 14, style: .continuous))
+                    if focus == row.id, !suggestions(for: row.name).isEmpty {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 6) {
+                                ForEach(suggestions(for: row.name)) { p in
+                                    Button { row.name = p.name } label: {
+                                        Text(p.name).font(.system(size: 13, weight: .semibold, design: .rounded))
+                                            .foregroundStyle(Palette.ink)
+                                            .padding(.horizontal, 12).frame(height: 30)
+                                            .background(Palette.mintSoft, in: .capsule)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                        }
+                    }
+                }
+                Button { let r = Row(); rows.append(r); focus = r.id } label: {
+                    Label("Add person", systemImage: "plus.circle.fill")
+                        .font(.system(size: 15, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Palette.mint)
+                }
+            }
+        }
+        .task {
+            let pending = (txn.splits ?? []).filter { $0.status != "settled" }
+            rows = pending.map { Row(name: $0.person ?? "", amount: String(format: "%.2f", $0.share_amount)) }
+            if rows.isEmpty { rows = [Row()] }
+            people = (try? await API(auth: auth).people()) ?? []
+        }
+    }
+
+    private func suggestions(for text: String) -> [Person] {
+        let q = text.lowercased()
+        return Array(people.filter { q.isEmpty || $0.name.lowercased().contains(q) }.filter { $0.name != text }.prefix(8))
+    }
+
+    /// Everyone (you included) pays total/n; fills or trims the rows to n-1 people.
+    private func splitEqually(_ n: Int) {
+        let each = (total / Double(n) * 100).rounded() / 100
+        while rows.count < n - 1 { rows.append(Row()) }
+        if rows.count > n - 1 { rows = Array(rows.prefix(n - 1)) }
+        for i in rows.indices { rows[i].amount = String(format: "%.2f", each) }
     }
 }
 

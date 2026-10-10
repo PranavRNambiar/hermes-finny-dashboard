@@ -4,7 +4,7 @@ import { bearer, issuer, verifyAccessToken } from "./auth";
 
 export const CORS = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, POST, PATCH, OPTIONS",
+  "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, OPTIONS",
   "Access-Control-Allow-Headers": "Authorization, Content-Type, mcp-protocol-version",
 };
 

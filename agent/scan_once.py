@@ -23,6 +23,7 @@ logging.basicConfig(level=logging.WARNING)
 from gmail_watch import fetch_body_and_msgid
 from db import is_processed, mark_processed, insert_transaction, update_recurring_patterns, get_merchant_tag, set_pending_tag, get_active_cards
 from parser import parse_transaction, SkipEmail, is_paylah_sender
+from incoming import save_incoming
 from categoriser import categorise
 
 SGT = timezone(timedelta(hours=8))
@@ -73,24 +74,26 @@ def process_recent(server: IMAPClient, label: str, card: str, currency: str, day
         if fetched is None:
             fetch_failed += 1  # give up on this email for now; next scan/watcher retries it
             continue
-        body, _, subject, sender = fetched
+        body, _, subject, sender, sent = fetched
 
-        to_process.append((email_id, body, subject, sender))
+        to_process.append((email_id, body, subject, sender, sent))
 
     if not to_process:
         return {"saved": 0, "fetch_failed": fetch_failed, "parse_failed": 0}
 
     # Phase 2: parse + categorise in parallel (LLM calls are independent)
     def llm_process(item):
-        email_id, body, subject, sender = item
+        email_id, body, subject, sender, sent = item
         try:
-            parsed = parse_transaction(body, card, currency, subject=subject, sender=sender)
+            parsed = parse_transaction(body, card, currency, subject=subject, sender=sender, sent=sent)
         except SkipEmail:
             return (email_id, None, None, "skip", sender)
         except Exception:
             return (email_id, None, None, "error", sender)
         if parsed is None:
             return (email_id, None, None, "parse_failed", sender)
+        if parsed.get("direction") == "in":
+            return (email_id, parsed, None, "incoming", sender)
         category = categorise(parsed["merchant"] or "", parsed.get("raw_desc") or "")
         return (email_id, parsed, category, "ok", sender)
 
@@ -109,6 +112,13 @@ def process_recent(server: IMAPClient, label: str, card: str, currency: str, day
         if status == "parse_failed":
             parse_failed += 1  # LLM couldn't extract fields — flagged for review
             mark_processed(email_id, parse_failed=True)
+            continue
+        if status == "incoming":
+            try:
+                save_incoming(email_id, card, parsed, notify=False)  # scans can be bulk; no per-item pings
+                saved += 1
+            except Exception:
+                pass
             continue
         txn = {
             "id": email_id, "card": card, "currency": parsed["currency"],

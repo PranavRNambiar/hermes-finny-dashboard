@@ -174,6 +174,19 @@ struct InsightsView: View {
                             }
                         }
                         .tint(Palette.muted)
+                        if let pid = p.person_id {
+                            Button {
+                                Task {
+                                    try? await API(auth: auth).settle(personID: pid, currency: p.currency)
+                                    changes.bump()
+                                }
+                            } label: {
+                                Label("Mark \(p.name.split(separator: " ").first.map(String.init) ?? p.name) as paid", systemImage: "checkmark.circle")
+                                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                                    .foregroundStyle(Palette.mint)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .trailing)
+                        }
                     }
                 }
             } else {

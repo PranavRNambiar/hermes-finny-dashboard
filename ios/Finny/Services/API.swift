@@ -44,6 +44,26 @@ struct API {
         let _: Ignored = try await send("PATCH", "transactions/\(API.encodeID(id))", body)
     }
 
+    /// Replace who owes what on a transaction. Empty list removes the split.
+    func setSplits(transaction id: String, _ splits: [(name: String, amount: Double)]) async throws {
+        let _: Ignored = try await send("PUT", "transactions/\(API.encodeID(id))/splits",
+                                        ["splits": splits.map { ["name": $0.name, "amount": $0.amount] }])
+    }
+
+    func people() async throws -> [Person] { (try await get("people", [:]) as PeoplePage).people }
+
+    func settle(personID: Int, currency: String) async throws {
+        let _: Ignored = try await send("POST", "splits/settle", ["person_id": personID, "currency": currency])
+    }
+
+    func incoming(period: Period) async throws -> [Incoming] {
+        (try await get("incoming", ["period": period.rawValue]) as IncomingPage).incoming
+    }
+
+    func setIncomingKind(id: String, kind: String, applyToSender: Bool) async throws {
+        let _: Ignored = try await send("PATCH", "incoming/\(API.encodeID(id))", ["kind": kind, "apply_to_counterparty": applyToSender])
+    }
+
     /// Custom display name for a merchant (all past and future transactions). nil resets it.
     func rename(merchant raw: String, to name: String?) async throws {
         let _: Ignored = try await send("POST", "merchants/rename", ["merchant": raw, "display_name": name ?? NSNull()])

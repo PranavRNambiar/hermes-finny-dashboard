@@ -32,9 +32,11 @@ Return ONLY valid JSON matching this schema:
   "amount": number,        // positive number, no currency symbol — must match a labeled amount (e.g. "Amount ₹2,159.53" or "spent 25.18 SGD" or "Amount: 2 SGD"). Ignore stray numbers like image dimensions or font sizes.
   "currency": "SGD"|"INR", // infer from card context passed in. Exception: ixigo (AU Bank) emails state the spend currency explicitly (e.g. "SGD 36.57 were spent") — use that stated currency.
   "merchant": string,      // merchant name, cleaned up. See per-bank rules below.
-  "txn_date": string,      // ISO 8601 YYYY-MM-DD. Use the current year provided in the prompt for dates that omit the year (e.g. "03 May", "27 Apr"). Indian emails (Scapia/Axis) use DD-MM-YYYY — e.g. "12-04-2026" → "2026-04-12". Wise emails use "11 April 2026". DBS card emails use "03/05/26" (DD/MM/YY). Never invent a date.
+  "txn_date": string,      // ISO 8601 YYYY-MM-DD. Use the current year provided in the prompt for dates that omit the year (e.g. "03 May", "27 Apr"). Indian emails (Scapia/Axis) use DD-MM-YYYY — e.g. "12-04-2026" → "2026-04-12". Wise emails use "11 April 2026". DBS card emails use "03/05/26" (DD/MM/YY). Never invent a date: if the body has no date, use the "Email sent (SGT)" date (and its time for txn_time).
   "txn_time": string|null, // HH:MM in 24h, exactly as stated in the email (do NOT convert timezones). e.g. "01:59 PM" → "13:59", "08:16:28" → "08:16", "22:07 (SGT)" → "22:07". Null if no time in email.
-  "raw_desc": string       // first 200 chars of the relevant email section
+  "raw_desc": string,      // first 200 chars of the relevant email section
+  "direction": "out"|"in", // "out" = money spent (default). "in" = money received — see INCOMING rules
+  "kind": string|null      // only for direction "in": "salary" | "transfer" | "refund" | "own_transfer"
 }
 
 Bank-specific rules:
@@ -46,8 +48,8 @@ Wise — two valid transaction types:
 DBS — three valid transaction types (all sent from DBS, treat as the same bank/card):
 1. PayNow sent (subject "iBanking Alerts"): "Date & Time: DD Mon HH:MM (SGT) Amount: SGDX.XX To: MERCHANT (MOBILE/UEN ...)" — merchant is the name before the parenthesis e.g. "Riya Malik", "BIRDS OF PARADISE"
 2. Card purchase (subject "Card Transaction Alert"): "Date & Time: DD Mon HH:MM (SGT) Amount: SGDX.XX ... To: MERCHANT"
-3. DBS PayLah! alert (sender "paylah.alert@dbs.com"): a PayNow/QR payment sent from the PayLah! wallet. Format varies but generally states an amount and a recipient/merchant name and a date/time — extract them the same way as type 1 (PayNow). If the email is a "received"/incoming alert, top-up confirmation, or balance notification rather than an outgoing payment, treat it like the SKIP rule below.
-SKIP DBS emails that are incoming transfers ("You have received"), eDocuments, or card alert preference changes.
+3. DBS PayLah! alert (sender "paylah.alert@dbs.com"): a PayNow/QR payment sent from the PayLah! wallet. Format varies but generally states an amount and a recipient/merchant name and a date/time — extract them the same way as type 1 (PayNow). A PayLah! "received" alert is INCOMING (see below); top-up confirmations and balance notifications are SKIP.
+SKIP DBS eDocuments and card alert preference changes.
 
 ixigo (AU Small Finance Bank credit card) — transaction alert reads:
 "CUR X.XX were spent on your AU Bank Credit Card xx1234 at MERCHANT on DD-MM-YYYY at hh:mm:ss am/pm"
@@ -56,7 +58,15 @@ ixigo (AU Small Finance Bank credit card) — transaction alert reads:
 - date is DD-MM-YYYY, time is 12-hour with am/pm (convert to 24h, e.g. "02:11:41 pm" → "14:11")
 SKIP AU Bank "Payment Alert" emails ("Payment of Rs.X was credited to your Card") — those are bill payments, not spends.
 
-If this email is NOT an outgoing transaction alert (e.g. statement, promotional, reward, incoming transfer), return {"skip": true}.
+INCOMING money — return the same fields with "direction": "in", "merchant" = who the money came from, and a "kind":
+- DBS "You've received a transfer" / "You have received SGD X via PayNow/FAST/GIRO on DD Mon YYYY HH:MM SGT. From: NAME" → merchant = NAME.
+  kind "salary" if the text says salary, payroll, SAL or GIRO from an employer, or the payer is clearly a company/institution paying a large round-ish amount; otherwise kind "transfer".
+- Scapia "Your transaction has been reversed" or "Your refund is here" (Amount ₹X, Merchant M) → kind "refund", merchant = M. Use the email's date if the body has none.
+- Wise "You added X SGD to your account" / "Money added" → kind "own_transfer", merchant "Wise top-up".
+- Wise "You received X from NAME" → kind "transfer" (or "salary" by the same rule as DBS), merchant = NAME.
+SKIP card bill repayments ("Your repayment is successful", "Payment ... credited to your Card"), statements, OTPs, declined transactions and reminders — they are not money in or out.
+
+If this email is neither an outgoing transaction nor incoming money (e.g. statement, promotional, reward, OTP, decline), return {"skip": true}.
 If you cannot extract amount or txn_date with confidence, return {"skip": true}.
 Return ONLY the JSON object. No markdown, no explanation."""
 
@@ -67,6 +77,7 @@ def parse_transaction(
     currency: str,
     subject: str = "",
     sender: str = "",
+    sent: str = "",
 ) -> Optional[dict]:
     """
     Parse a transaction email using Claude.
@@ -80,8 +91,9 @@ def parse_transaction(
     body_truncated = email_body[:1500]
     subject_line = f"Subject: {subject}\n" if subject else ""
     sender_line = f"From: {sender}\n" if sender else ""
+    sent_line = f"Email sent (SGT): {sent}\n" if sent else ""
     current_year = datetime.now(SGT).year
-    user_message = f"Card: {card}\nCurrency: {currency}\nCurrent year: {current_year}\n{subject_line}{sender_line}\nEmail body:\n{body_truncated}"
+    user_message = f"Card: {card}\nCurrency: {currency}\nCurrent year: {current_year}\n{subject_line}{sender_line}{sent_line}\nEmail body:\n{body_truncated}"
 
     try:
         response = client.messages.create(
@@ -124,4 +136,7 @@ def parse_transaction(
         except Exception:
             pass  # leave as-is if conversion fails
 
+    parsed["direction"] = "in" if parsed.get("direction") == "in" else "out"
+    if parsed["direction"] == "in" and parsed.get("kind") not in ("salary", "transfer", "refund", "own_transfer"):
+        parsed["kind"] = "transfer"
     return parsed

@@ -15,7 +15,13 @@ struct Txn: Decodable, Identifiable, Hashable {
     let user_tag: String?
     let raw_desc: String?
     let raw_merchant: String?
+    /// Full card charge; `amount` is your share after splits.
+    let total_amount: Double?
+    let split_with: Int?
     let splits: [Split]?
+
+    var isSplit: Bool { (split_with ?? 0) > 0 }
+    var fullAmount: Double { total_amount ?? amount }
 
     /// Custom names (set in the app) are shown exactly as typed; bank names get tidied.
     var displayMerchant: String {
@@ -26,6 +32,8 @@ struct Txn: Decodable, Identifiable, Hashable {
     var date: Date { DateFormatter.isoDay.date(from: txn_date) ?? .now }
 
     struct Split: Decodable, Hashable {
+        let split_id: Int?
+        let person_id: Int?
         let person: String?
         let share_amount: Double
         let currency: String
@@ -72,8 +80,16 @@ struct Overview: Decodable {
         let fx_rate: Double?
         let fx_date: String?
     }
+    struct CashFlow: Decodable {
+        let in_total: Double
+        let out_total: Double
+        let net: Double
+        let in_by_kind: [String: Double]
+        let in_count: Int
+    }
     let period: PeriodInfo
     let combined: Combined?
+    let cash_flow: [String: CashFlow]?
     let currencies: [String: CurrencySummary]
     let anomalies: [Txn]
 }
@@ -105,6 +121,7 @@ struct Splits: Decodable {
             let share_amount: Double
             var id: Int { split_id }
         }
+        let person_id: Int?
         let name: String
         let currency: String
         let total: Double
@@ -209,4 +226,42 @@ extension DateFormatter {
         f.dateFormat = "yyyy-MM-dd"
         return f
     }()
+}
+
+struct Incoming: Decodable, Identifiable, Hashable {
+    let id: String
+    let card: String
+    let currency: String
+    let amount: Double
+    let counterparty: String?
+    let kind: String
+    let txn_date: String
+    let txn_time: String?
+    var date: Date { DateFormatter.isoDay.date(from: txn_date) ?? .now }
+    var name: String { (counterparty?.nilIfEmpty).map(prettyMerchant) ?? "Unknown" }
+}
+
+struct IncomingPage: Decodable { let incoming: [Incoming] }
+struct Person: Decodable, Identifiable, Hashable { let id: Int; let name: String }
+struct PeoplePage: Decodable { let people: [Person] }
+
+enum IncomingKind: String, CaseIterable, Identifiable {
+    case salary, transfer, refund, own_transfer
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .salary: "Salary"
+        case .transfer: "Transfer in"
+        case .refund: "Refund"
+        case .own_transfer: "Own transfer"
+        }
+    }
+    var symbol: String {
+        switch self {
+        case .salary: "briefcase.fill"
+        case .transfer: "arrow.down.left"
+        case .refund: "arrow.uturn.backward"
+        case .own_transfer: "arrow.left.arrow.right"
+        }
+    }
 }

@@ -145,6 +145,24 @@ def insert_transaction(txn: dict) -> None:
     db.table("transactions").upsert(txn).execute()
 
 
+# ── incoming money ───────────────────────────────────────────
+# Kept in its own table so nothing that sums `transactions` (dashboard, digests,
+# anomaly checks, recurring patterns) can mistake money received for spending.
+
+def insert_incoming(row: dict) -> str:
+    """Insert one incoming-money row. Returns the kind actually stored: a kind the
+    owner set for this sender (incoming_rules) wins over the parser's guess."""
+    db = get_client()
+    try:
+        rule = db.table("incoming_rules").select("kind").eq("counterparty", row.get("counterparty") or "").limit(1).execute()
+        if rule.data:
+            row["kind"] = rule.data[0]["kind"]
+    except Exception:
+        pass  # rules table optional
+    db.table("incoming").upsert(row).execute()
+    return row["kind"]
+
+
 # ── merchant_tags ────────────────────────────────────────────
 
 def get_merchant_tag(merchant: str) -> str | None:

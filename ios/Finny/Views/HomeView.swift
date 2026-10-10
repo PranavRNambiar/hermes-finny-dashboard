@@ -25,6 +25,7 @@ struct HomeView: View {
                         ErrorBanner(message: error) { Task { await load() } }
                     } else if let data, let s = summary {
                         hero(s, label: data.period.label)
+                        if let cf = data.cash_flow?[currency] { cashFlow(cf) }
                         categories(s)
                         merchants(s)
                         largest(s)
@@ -135,6 +136,62 @@ struct HomeView: View {
         VStack(alignment: .leading, spacing: 4) {
             Eyebrow(title, color: .white.opacity(0.45))
             value().font(.system(size: 16, weight: .bold, design: .rounded).monospacedDigit())
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    // MARK: Money in vs out
+
+    private func cashFlow(_ cf: Overview.CashFlow) -> some View {
+        Card(title: "Money in vs out") {
+            HStack(alignment: .top, spacing: 12) {
+                flowStat("In", cf.in_total, Palette.mint, prefix: "+")
+                flowStat("Out · your share", cf.out_total, Palette.ink, prefix: "−")
+            }
+            if cf.in_total > 0 {
+                HStack(alignment: .firstTextBaseline) {
+                    Eyebrow(cf.net >= 0 ? "Net saved" : "Net overspent")
+                    Spacer()
+                    Text((cf.net >= 0 ? "+" : "−") + Money.format(abs(cf.net), currency))
+                        .font(.system(size: 20, weight: .bold, design: .rounded).monospacedDigit())
+                        .foregroundStyle(cf.net >= 0 ? Palette.mint : Palette.coral)
+                }
+                GeometryReader { g in
+                    let outShare = min(1, cf.out_total / max(cf.in_total, 1))
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Palette.mintSoft)
+                        Capsule().fill(outShare >= 1 ? Palette.coral : Palette.ink).frame(width: g.size.width * outShare)
+                    }
+                }
+                .frame(height: 8)
+                Text(cf.net >= 0
+                     ? "Kept \(Int((cf.net / cf.in_total * 100).rounded()))% of what came in."
+                     : "Spent more than came in this period.")
+                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                    .foregroundStyle(Palette.inkSoft)
+                HStack(spacing: 8) {
+                    ForEach(cf.in_by_kind.sorted { $0.value > $1.value }, id: \.key) { k, v in
+                        Text("\(IncomingKind(rawValue: k)?.label ?? k) \(Money.format(v, currency, compact: true))")
+                            .font(.system(size: 11, weight: .bold, design: .rounded))
+                            .foregroundStyle(Palette.mint)
+                            .padding(.horizontal, 8).padding(.vertical, 4)
+                            .background(Palette.mintSoft, in: .capsule)
+                    }
+                }
+            } else {
+                Text("No money in recorded for this period yet. Salary and transfers appear as their bank alerts arrive.")
+                    .font(.caption).foregroundStyle(Palette.muted)
+            }
+        }
+    }
+
+    private func flowStat(_ title: String, _ value: Double, _ color: Color, prefix: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Eyebrow(title)
+            Text(prefix + Money.format(value, currency))
+                .font(.system(size: 20, weight: .bold, design: .rounded).monospacedDigit())
+                .foregroundStyle(color)
+                .lineLimit(1).minimumScaleFactor(0.7)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }

@@ -13,6 +13,8 @@ import {
   fxRate,
   getTransaction,
   listCards,
+  listIncoming,
+  resolvePeriod,
   listCategoriesAndTags,
   listTransactions,
   overview,
@@ -25,7 +27,8 @@ export const maxDuration = 60;
 
 const INSTRUCTIONS = `Finny holds Pranav's card transactions, parsed from bank alert emails (cards: wise, dbs, scapia, axis, ixigo, ocbc).
 Rules:
-- Amounts are always positive spend. Currencies are SGD and INR and are NEVER summed together; report each currency separately. Use get_fx_rate only if the user asks for a combined figure, and say it is converted.
+- Spending amounts are always positive and are the OWNER'S SHARE: when a bill was split, "amount" excludes what friends owe ("total_amount" is the full charge, "split_with" how many people share it). Use amount for all spending analysis.
+- Money received (salary, transfers in, refunds) is separate: use money_in, or cash_flow in spending_overview (income vs spend per currency). Own top-ups/transfers are not income. Currencies are SGD and INR and are NEVER summed together; report each currency separately. Use get_fx_rate only if the user asks for a combined figure, and say it is converted.
 - Dates are calendar dates in Asia/Singapore (SGT).
 - Start broad questions with spending_overview; use spending_breakdown for "by X" questions and list_transactions for specifics.
 - Categories are fixed: Food & Drink, Transport, Shopping, Subscriptions, Health & Fitness, Travel, Utilities & Bills, Rent & Housing, Entertainment, Education, Transfers & Misc.
@@ -96,6 +99,30 @@ function registerTools(server: McpServer, iss: string) {
       annotations: READ,
     },
     async (args) => ok(await spendingBreakdown(args))
+  );
+
+  server.registerTool(
+    "money_in",
+    {
+      title: "Money in",
+      description:
+        "Money received in a period: salary, transfers from people, refunds, and own top-ups (own_transfer — not income). Per item with counterparty and kind, plus totals per currency and kind.",
+      inputSchema: {
+        period,
+        kind: z.enum(["salary", "transfer", "refund", "own_transfer"]).optional(),
+      },
+      annotations: READ,
+    },
+    async ({ period, kind }) => {
+      const range = resolvePeriod(period);
+      const { incoming } = await listIncoming({ from: range.from, to: range.to, kind });
+      const totals: Record<string, Record<string, number>> = {};
+      for (const r of incoming) {
+        totals[r.currency] ??= {};
+        totals[r.currency][r.kind] = Math.round(((totals[r.currency][r.kind] ?? 0) + r.amount) * 100) / 100;
+      }
+      return ok({ period: range, totals_by_currency_and_kind: totals, items: incoming });
+    }
   );
 
   server.registerTool(
