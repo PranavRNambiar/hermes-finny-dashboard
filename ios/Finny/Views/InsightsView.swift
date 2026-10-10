@@ -4,7 +4,9 @@ import SwiftUI
 struct InsightsView: View {
     @Environment(Auth.self) private var auth
     @Environment(DataChanges.self) private var changes
+    @Environment(InsightsStore.self) private var store
     @AppStorage("currencyMode") private var mode: CurrencyMode = .sgd
+    @State private var editing: InsightSpec?
     @State private var monthly: [String: Breakdown] = [:]
     @State private var tags: [String: Breakdown] = [:]
     @State private var subs: [Subscription] = []
@@ -24,6 +26,7 @@ struct InsightsView: View {
                     } else if !loaded {
                         ProgressView().tint(Palette.ink).frame(maxWidth: .infinity, minHeight: 300)
                     } else {
+                        yourInsights
                         trend
                         tagsCard
                         owed
@@ -37,6 +40,13 @@ struct InsightsView: View {
             .toolbar(.hidden, for: .navigationBar)
             .refreshable { await load() }
             .task(id: "\(mode.rawValue)-\(changes.version)") { await load() }
+            .onChange(of: mode) { _, m in SharedStore.currencyMode = m.rawValue }
+            .sheet(item: $editing) { s in
+                InsightBuilderSheet(spec: s, mode: mode) { saved in
+                    store.save(saved)
+                    Feedback.play(.success)
+                }
+            }
         }
     }
 
@@ -99,6 +109,62 @@ struct InsightsView: View {
     }
 
     private var currency: String { mode.currency }
+
+    // MARK: Your insights (pinned charts)
+
+    @ViewBuilder private var yourInsights: some View {
+        HStack {
+            Eyebrow("Your insights")
+            Spacer()
+            Button {
+                Feedback.play(.tap)
+                editing = InsightSpec()
+            } label: {
+                Label("New", systemImage: "plus")
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .foregroundStyle(Palette.surface)
+                    .padding(.horizontal, 12).frame(height: 32)
+                    .background(Palette.ink, in: .capsule)
+            }
+        }
+        if store.pinned.isEmpty {
+            Button { editing = InsightSpec() } label: {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Build your own chart").font(.system(size: 16, weight: .bold, design: .rounded)).foregroundStyle(Palette.ink)
+                    Text("Pick a merchant, category or tag, a range (today to a custom window) and a pie, bar or line chart. Pin it here or put it on your Home Screen as a widget.")
+                        .font(.system(size: 13, design: .rounded)).foregroundStyle(Palette.inkSoft)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .card()
+            }
+            .buttonStyle(.plain)
+        }
+        ForEach(store.pinned) { spec in
+            InsightCard(spec: spec, mode: mode,
+                        onEdit: { editing = spec },
+                        onUnpin: { store.togglePin(spec); Feedback.play(.select) },
+                        onDelete: { store.delete(spec); Feedback.play(.warning) })
+        }
+        if !store.saved.isEmpty {
+            DisclosureGroup {
+                VStack(spacing: 0) {
+                    ForEach(store.saved) { spec in
+                        HStack {
+                            Text(spec.title).font(.system(size: 14, weight: .semibold, design: .rounded)).foregroundStyle(Palette.ink).lineLimit(1)
+                            Spacer()
+                            Button("Pin") { store.togglePin(spec); Feedback.play(.select) }
+                                .font(.system(size: 13, weight: .bold, design: .rounded)).foregroundStyle(Palette.mint)
+                        }
+                        .padding(.vertical, 10)
+                    }
+                }
+            } label: {
+                Text("Saved for widgets (\(store.saved.count))").font(.system(size: 14, weight: .semibold, design: .rounded)).foregroundStyle(Palette.inkSoft)
+            }
+            .tint(Palette.muted)
+            .card(padding: 14)
+        }
+    }
 
     // MARK: Tags
 

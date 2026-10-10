@@ -18,7 +18,10 @@ final class Auth: NSObject {
     var errorMessage: String?
 
     var serverURL: URL? {
-        didSet { UserDefaults.standard.set(serverURL?.absoluteString, forKey: "serverURL") }
+        didSet {
+            UserDefaults.standard.set(serverURL?.absoluteString, forKey: "serverURL")
+            SharedStore.serverURL = serverURL   // widgets read it from the App Group
+        }
     }
 
     private var accessToken: String?
@@ -28,7 +31,9 @@ final class Auth: NSObject {
     override init() {
         super.init()
         if let s = UserDefaults.standard.string(forKey: "serverURL") { serverURL = URL(string: s) }
-        isSignedIn = serverURL != nil && Keychain.read("refreshToken") != nil
+        SharedStore.serverURL = serverURL
+        if let token = TokenStore.read() { TokenStore.save(token) }  // move older tokens into the shared group
+        isSignedIn = serverURL != nil && TokenStore.read() != nil
     }
 
     // MARK: Sign in
@@ -81,7 +86,7 @@ final class Auth: NSObject {
     }
 
     func signOut() {
-        Keychain.delete("refreshToken")
+        TokenStore.delete()
         accessToken = nil
         accessExpiry = .distantPast
         isSignedIn = false
@@ -95,7 +100,7 @@ final class Auth: NSObject {
         if let running = refreshTask { return try await running.value }
         let task = Task { () throws -> String in
             defer { refreshTask = nil }
-            guard let rt = Keychain.read("refreshToken") else { throw AuthError.signedOut }
+            guard let rt = TokenStore.read() else { throw AuthError.signedOut }
             do {
                 try await requestTokens(["grant_type": "refresh_token", "refresh_token": rt, "client_id": Self.clientID])
             } catch AuthError.rejected {
@@ -132,7 +137,7 @@ final class Auth: NSObject {
         let tok = try JSONDecoder().decode(TokenResponse.self, from: data)
         accessToken = tok.access_token
         accessExpiry = .now.addingTimeInterval(tok.expires_in)
-        if let rt = tok.refresh_token { Keychain.save(rt, for: "refreshToken") }
+        if let rt = tok.refresh_token { TokenStore.save(rt) }
     }
 
     // MARK: Helpers
@@ -189,42 +194,5 @@ extension Data {
     var base64URL: String {
         base64EncodedString().replacingOccurrences(of: "+", with: "-")
             .replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
-    }
-}
-
-enum Keychain {
-    private static let service = "com.pranav.finny"
-
-    static func save(_ value: String, for key: String) {
-        delete(key)
-        let q: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: key,
-            kSecValueData as String: Data(value.utf8),
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
-        ]
-        SecItemAdd(q as CFDictionary, nil)
-    }
-
-    static func read(_ key: String) -> String? {
-        let q: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: key,
-            kSecReturnData as String: true,
-        ]
-        var out: AnyObject?
-        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess, let d = out as? Data else { return nil }
-        return String(data: d, encoding: .utf8)
-    }
-
-    static func delete(_ key: String) {
-        let q: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: key,
-        ]
-        SecItemDelete(q as CFDictionary)
     }
 }

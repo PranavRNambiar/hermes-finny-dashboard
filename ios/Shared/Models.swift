@@ -90,6 +90,8 @@ struct Overview: Decodable {
     let period: PeriodInfo
     let combined: Combined?
     let cash_flow: [String: CashFlow]?
+    struct Excluded: Decodable { let total: Double; let count: Int }
+    let excluded: [String: Excluded]?
     let currencies: [String: CurrencySummary]
     let anomalies: [Txn]
 }
@@ -185,15 +187,24 @@ enum CurrencyMode: String, CaseIterable, Identifiable {
 
 let allCategories = [
     "Food & Drink", "Transport", "Shopping", "Subscriptions", "Health & Fitness", "Travel",
-    "Utilities & Bills", "Rent & Housing", "Entertainment", "Education", "Transfers & Misc",
+    "Utilities & Bills", "Rent & Housing", "Entertainment", "Education", "Transfers & Misc", "Exclusions",
 ]
 
+/// Category for big one-offs (e.g. tuition): shown, but left out of every spending total.
+let excludedCategory = "Exclusions"
+
 enum Period: String, CaseIterable, Identifiable {
-    case last_7_days, this_month, last_month, last_30_days, this_year
+    case today, last_7_days, this_week, this_month, last_month, last_30_days, this_quarter, this_year
+
+    /// The quick picker on Overview.
+    static let overview: [Period] = [.last_7_days, .this_month, .last_month, .last_30_days, .this_year]
     var id: String { rawValue }
     var short: String {
         switch self {
+        case .today: "Today"
         case .last_7_days: "7D"
+        case .this_week: "Week"
+        case .this_quarter: "Quarter"
         case .this_month: "Month"
         case .last_month: "Last mo"
         case .last_30_days: "30D"
@@ -264,4 +275,19 @@ enum IncomingKind: String, CaseIterable, Identifiable {
         case .own_transfer: "arrow.left.arrow.right"
         }
     }
+}
+
+struct MerchantInfo: Decodable, Identifiable, Hashable {
+    let name: String
+    let count: Int
+    let last: String
+    let totals: [String: Double]
+    let renamed: Bool
+    var id: String { name }
+}
+struct MerchantPage: Decodable { let merchants: [MerchantInfo] }
+
+/// Lets shared UI (pickers) trigger the app's haptics/sounds without depending on app-only code.
+enum FeedbackHook {
+    @MainActor static var select: () -> Void = {}
 }

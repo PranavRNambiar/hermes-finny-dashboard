@@ -1,9 +1,16 @@
 import SwiftUI
+import WidgetKit
 
 @main
 struct FinnyApp: App {
     @State private var auth = Auth()
     @State private var changes = DataChanges()
+    @State private var insights = InsightsStore()
+    @Environment(\.scenePhase) private var phase
+
+    init() {
+        FeedbackHook.select = { Feedback.play(.select) }
+    }
 
     var body: some Scene {
         WindowGroup {
@@ -16,20 +23,27 @@ struct FinnyApp: App {
             }
             .environment(auth)
             .environment(changes)
+            .environment(insights)
+            .onChange(of: phase) { _, p in
+                // Coming back to the app: refresh screens and widgets with the latest transactions.
+                if p == .active && auth.isSignedIn { changes.bump() }
+            }
             .animation(.default, value: auth.isSignedIn)
         }
     }
 }
 
 struct RootTabs: View {
+    @State private var tab = 0
     var body: some View {
-        TabView {
-            HomeView().tabItem { Label("Overview", systemImage: "circle.grid.2x2.fill") }
-            ActivityView().tabItem { Label("Activity", systemImage: "list.bullet") }
-            InsightsView().tabItem { Label("Insights", systemImage: "chart.bar.fill") }
-            SettingsView().tabItem { Label("Settings", systemImage: "slider.horizontal.3") }
+        TabView(selection: $tab) {
+            HomeView().tabItem { Label("Overview", systemImage: "circle.grid.2x2.fill") }.tag(0)
+            ActivityView().tabItem { Label("Activity", systemImage: "list.bullet") }.tag(1)
+            InsightsView().tabItem { Label("Insights", systemImage: "chart.bar.fill") }.tag(2)
+            SettingsView().tabItem { Label("Settings", systemImage: "slider.horizontal.3") }.tag(3)
         }
         .tint(Palette.ink)
+        .onChange(of: tab) { _, _ in Feedback.play(.tap) }
     }
 }
 
@@ -38,5 +52,8 @@ struct RootTabs: View {
 @Observable
 final class DataChanges {
     var version = 0
-    func bump() { version += 1 }
+    func bump() {
+        version += 1
+        WidgetCenter.shared.reloadAllTimelines()   // widgets pick up edits and new transactions right away
+    }
 }

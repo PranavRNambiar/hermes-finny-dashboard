@@ -36,6 +36,7 @@ export type TxnFilters = {
   currency?: string;
   category?: string;
   merchant?: string; // case-insensitive substring
+  merchant_exact?: string; // exact merchant: a custom name or the bank's name
   tag?: string;
   min_amount?: number;
   max_amount?: number;
@@ -84,10 +85,15 @@ export type Period =
   | "today"
   | "last_7_days"
   | "last_30_days"
+  | "this_week"
   | "this_month"
   | "last_month"
+  | "this_quarter"
   | "this_year"
   | "all_time";
+
+/** Category the owner uses for big one-offs (e.g. tuition): visible, but never counted as spending. */
+export const EXCLUDED = "Exclusions";
 
 export function resolvePeriod(period: Period): { from: string; to: string; label: string } {
   const today = todaySGT();
@@ -98,8 +104,17 @@ export function resolvePeriod(period: Period): { from: string; to: string; label
       return { from: shiftDays(today, -6), to: today, label: "last 7 days" };
     case "last_30_days":
       return { from: shiftDays(today, -29), to: today, label: "last 30 days" };
+    case "this_week": {
+      const dow = (new Date(`${today}T00:00:00Z`).getUTCDay() + 6) % 7; // Monday = 0
+      return { from: shiftDays(today, -dow), to: today, label: "this week" };
+    }
     case "this_month":
       return { from: `${today.slice(0, 7)}-01`, to: today, label: "this month to date" };
+    case "this_quarter": {
+      const m = Number(today.slice(5, 7));
+      const qStart = String(Math.floor((m - 1) / 3) * 3 + 1).padStart(2, "0");
+      return { from: `${today.slice(0, 4)}-${qStart}-01`, to: today, label: "this quarter to date" };
+    }
     case "last_month":
       return { ...monthBounds(prevMonth(today.slice(0, 7))), label: "last month" };
     case "this_year":
@@ -114,16 +129,16 @@ export function resolvePeriod(period: Period): { from: string; to: string; label
 // read time, so future transactions pick them up immediately. Categories are also
 // written back to the rows (see syncRuleCategories) so SQL category filters match.
 
-type Rule = { display_name: string | null; category: string | null };
+type Rule = { display_name: string | null; category: string | null; updated_at?: string };
 let _rules: Map<string, Rule> = new Map();
 let _rulesAt = 0;
 let _syncedAt = 0;
 
 async function ensureRules(): Promise<Map<string, Rule>> {
   if (Date.now() - _rulesAt < 30_000) return _rules;
-  const { data, error } = await db().from("merchant_rules").select("merchant, display_name, category");
+  const { data, error } = await db().from("merchant_rules").select("merchant, display_name, category, updated_at");
   // Table missing (migration not run yet) → behave as if there are no rules.
-  _rules = new Map(error ? [] : (data ?? []).map((r: any) => [r.merchant, { display_name: r.display_name, category: r.category }]));
+  _rules = new Map(error ? [] : (data ?? []).map((r: any) => [r.merchant, { display_name: r.display_name, category: r.category, updated_at: r.updated_at }]));
   _rulesAt = Date.now();
   if (Date.now() - _syncedAt > 60_000) {
     _syncedAt = Date.now();
@@ -132,11 +147,13 @@ async function ensureRules(): Promise<Map<string, Rule>> {
   return _rules;
 }
 
-/** Re-apply rule categories to rows ingested since the rule was set. */
+/** Apply rule categories to transactions that arrived after the rule was set. Older rows
+ *  were updated when the rule was saved, and any one-off change made since stays put. */
 async function syncRuleCategories() {
   for (const [merchant, r] of _rules) {
-    if (!r.category) continue;
-    await db().from("transactions").update({ category: r.category }).eq("merchant", merchant).neq("category", r.category);
+    if (!r.category || !r.updated_at) continue;
+    await db().from("transactions").update({ category: r.category })
+      .eq("merchant", merchant).gt("ingested_at", r.updated_at).neq("category", r.category);
   }
 }
 
@@ -186,6 +203,11 @@ function applyFilters<Q extends { eq: any; gte: any; lte: any; ilike: any }>(q: 
       ? (q as any).or(`merchant.ilike.%${term}%,merchant.in.(${named.join(",")})`)
       : q.ilike("merchant", `%${term}%`);
   }
+  if (f.merchant_exact) {
+    const key = f.merchant_exact.toLowerCase();
+    const raws = [..._rules.entries()].filter(([, r]) => r.display_name?.toLowerCase() === key).map(([m]) => m);
+    q = (q as any).in("merchant", [...raws, f.merchant_exact]);
+  }
   if (f.min_amount != null) q = q.gte("amount", f.min_amount);
   if (f.max_amount != null) q = q.lte("amount", f.max_amount);
   return q;
@@ -209,9 +231,11 @@ export async function listTransactions(
   return { transactions: (data ?? []).map(cleanTxn), total: count ?? 0 };
 }
 
-/** Every matching row, paged past PostgREST's 1000-row cap. For aggregation only. */
-async function fetchAll(f: TxnFilters): Promise<Txn[]> {
+/** Every matching row, paged past PostgREST's 1000-row cap. For aggregation only, so
+ *  Exclusions are dropped unless asked for (explicitly or by filtering on that category). */
+async function fetchAll(f: TxnFilters, opts: { includeExcluded?: boolean } = {}): Promise<Txn[]> {
   await Promise.all([ensureRules(), ensureSplits()]);
+  const keepExcluded = opts.includeExcluded || f.category === EXCLUDED;
   const out: Txn[] = [];
   const page = 1000;
   for (let offset = 0; ; offset += page) {
@@ -222,7 +246,7 @@ async function fetchAll(f: TxnFilters): Promise<Txn[]> {
     out.push(...(data ?? []).map(cleanTxn));
     if (!data || data.length < page) break;
   }
-  return out;
+  return keepExcluded ? out : out.filter((t) => t.category !== EXCLUDED);
 }
 
 export async function getTransaction(id: string): Promise<(Txn & { splits: any[] }) | null> {
@@ -261,7 +285,7 @@ function cleanTxn(row: any): Txn {
     ...row,
     raw_merchant: row.merchant,
     merchant: rule?.display_name || row.merchant,
-    category: rule?.category || row.category,
+    category: row.category, // the row is the source of truth; rules are written into rows
     user_tag: tag && !tag.startsWith("__") ? tag : null,
     total_amount: total,
     amount: owed ? Math.max(0, round2(total - owed.total)) : total,
@@ -353,10 +377,18 @@ export async function overview(period: Period = "this_month", combine?: Combine)
     period === "all_time"
       ? []
       : await fetchAll({ from: shiftDays(range.from, -days), to: shiftDays(range.from, -1) });
+  let excludedRows = await fetchAll({ from: range.from, to: range.to, category: EXCLUDED });
   let fx: { rate: number; date: string } | null = null;
   if (combine) {
     ({ rows, fx } = await convertRows(rows, combine));
     prevRows = (await convertRows(prevRows, combine)).rows;
+    excludedRows = (await convertRows(excludedRows, combine)).rows;
+  }
+  const excluded: Record<string, { total: number; count: number }> = {};
+  for (const t of excludedRows) {
+    const e = (excluded[t.currency] ??= { total: 0, count: 0 });
+    e.total = round2(e.total + t.amount);
+    e.count += 1;
   }
 
   const currencies: Record<string, any> = {};
@@ -405,6 +437,7 @@ export async function overview(period: Period = "this_month", combine?: Combine)
     period: { name: period, ...range, days },
     combined: combine ? { currency: combine, fx_rate: fx?.rate, fx_date: fx?.date } : null,
     cash_flow,
+    excluded,
     currencies,
     anomalies: rows.filter((r) => r.anomaly_flagged).slice(-10),
   };
@@ -567,7 +600,7 @@ async function upsertRule(merchant: string, patch: Partial<Rule>) {
       error.message.includes("merchant_rules") ? "merchant_rules table missing: run supabase_merchant_rules.sql" : error.message
     );
   }
-  _rules.set(merchant, { display_name: next.display_name, category: next.category });
+  _rules.set(merchant, { display_name: next.display_name, category: next.category, updated_at: next.updated_at });
 }
 
 // ── Splits (edit) ──────────────────────────────────────────
@@ -667,4 +700,39 @@ export async function setIncomingKind(id: string, kind: string, applyToCounterpa
     if (r.error) throw new Error(r.error.message);
   }
   return { kind, counterparty: row.counterparty, all: applyToCounterparty };
+}
+
+// ── Insight builder + widgets ──────────────────────────────
+
+/** Every merchant (custom names applied) with spend and visit count, most-visited first. */
+export async function listMerchants() {
+  const rows = await fetchAll({}, { includeExcluded: true });
+  const m = new Map<string, { name: string; count: number; last: string; totals: Record<string, number>; renamed: boolean }>();
+  for (const t of rows) {
+    const name = t.merchant ?? "Unknown";
+    const e = m.get(name) ?? { name, count: 0, last: t.txn_date, totals: {}, renamed: t.merchant !== t.raw_merchant };
+    e.count += 1;
+    e.last = t.txn_date > e.last ? t.txn_date : e.last;
+    e.totals[t.currency] = round2((e.totals[t.currency] ?? 0) + t.amount);
+    m.set(name, e);
+  }
+  return [...m.values()].sort((a, b) => b.count - a.count).slice(0, 400);
+}
+
+/** Today / this week / this month totals, for widgets. One query from the earliest start. */
+export async function summary(combine?: Combine) {
+  const ranges = { today: resolvePeriod("today"), this_week: resolvePeriod("this_week"), this_month: resolvePeriod("this_month") };
+  const from = [ranges.today.from, ranges.this_week.from, ranges.this_month.from].sort()[0];
+  let rows = await fetchAll({ from });
+  if (combine) rows = (await convertRows(rows, combine)).rows;
+  const out: Record<string, Record<string, { total: number; count: number }>> = {};
+  for (const [key, r] of Object.entries(ranges)) {
+    for (const t of rows) {
+      if (t.txn_date < r.from || t.txn_date > r.to) continue;
+      const c = ((out[key] ??= {})[t.currency] ??= { total: 0, count: 0 });
+      c.total = round2(c.total + t.amount);
+      c.count += 1;
+    }
+  }
+  return { as_of: new Date().toISOString(), today: todaySGT(), ranges, totals: out };
 }

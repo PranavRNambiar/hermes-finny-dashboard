@@ -5,7 +5,7 @@ export const dynamic = "force-dynamic";
 
 const CATEGORIES = [
   "Food & Drink", "Transport", "Shopping", "Subscriptions", "Health & Fitness", "Travel",
-  "Utilities & Bills", "Rent & Housing", "Entertainment", "Education", "Transfers & Misc",
+  "Utilities & Bills", "Rent & Housing", "Entertainment", "Education", "Transfers & Misc", "Exclusions",
 ];
 
 type Params = { params: { id: string } };

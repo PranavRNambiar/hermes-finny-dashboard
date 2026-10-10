@@ -13,6 +13,8 @@ export const GET = (req: Request) =>
       to: range.to,
       currency: p.get("currency") ?? undefined,
       category: p.get("category") ?? undefined,
+      tag: p.get("tag") ?? undefined,
+      merchant_exact: p.get("merchant") ?? undefined,
       group_by: (p.get("group_by") as GroupBy) ?? "category",
       combine: combine === "SGD" || combine === "INR" ? (combine as Combine) : undefined,
     });

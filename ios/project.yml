@@ -13,14 +13,34 @@ targets:
   Finny:
     type: application
     platform: iOS
-    sources: [Finny]
+    sources: [Finny, Shared]
+    dependencies:
+      - target: FinnyWidgets
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.pranav.finny
         INFOPLIST_FILE: Finny/Resources/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Finny/Resources/Finny.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         TARGETED_DEVICE_FAMILY: "1"
         GENERATE_INFOPLIST_FILE: NO
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: 9U72AVU3KH
+  FinnyWidgets:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: FinnyWidgets
+        excludes: ["*.entitlements"]
+      - Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.pranav.finny.widgets
+        INFOPLIST_FILE: FinnyWidgets/Info.plist
+        CODE_SIGN_ENTITLEMENTS: FinnyWidgets/FinnyWidgets.entitlements
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: NO
+        SKIP_INSTALL: YES
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: 9U72AVU3KH

@@ -198,6 +198,7 @@ private struct EditSheetFrame<Content: View>: View {
             saving = true
             error = await onSave()
             saving = false
+            Feedback.play(error == nil ? .success : .warning)
             if error == nil { dismiss() }
         }
     }
@@ -479,6 +480,8 @@ struct SettingsView: View {
     @Environment(Auth.self) private var auth
     @State private var meta: Meta?
     @State private var confirmSignOut = false
+    @AppStorage("haptics") private var haptics = true
+    @AppStorage("sounds") private var sounds = true
 
     var body: some View {
         NavigationStack {
@@ -538,6 +541,25 @@ struct SettingsView: View {
                             }
                         }
                     }
+
+                    Card(title: "Feel") {
+                        Toggle(isOn: $haptics) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Haptics").font(.system(size: 15, weight: .semibold, design: .rounded)).foregroundStyle(Palette.ink)
+                                Text("Light taps on switches, saves and tabs").font(.caption).foregroundStyle(Palette.muted)
+                            }
+                        }
+                        Perforation()
+                        Toggle(isOn: $sounds) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Click sounds").font(.system(size: 15, weight: .semibold, design: .rounded)).foregroundStyle(Palette.ink)
+                                Text("Soft clicks and a pop when something saves. Follows the silent switch.").font(.caption).foregroundStyle(Palette.muted)
+                            }
+                        }
+                    }
+                    .tint(Palette.mint)
+                    .onChange(of: haptics) { _, _ in Feedback.play(.select) }
+                    .onChange(of: sounds) { _, on in if on { Feedback.play(.select) } }
 
                     Button { confirmSignOut = true } label: {
                         Text("Sign out")

@@ -1,5 +1,6 @@
 import Charts
 import SwiftUI
+import WidgetKit
 
 struct HomeView: View {
     @Environment(Auth.self) private var auth
@@ -19,7 +20,7 @@ struct HomeView: View {
                     ScreenHeader(eyebrow: Date.now.formatted(.dateTime.weekday(.wide).day().month(.wide)), title: "Overview") {
                         CurrencyPicker(mode: $mode)
                     }
-                    PillPicker(options: Period.allCases, selection: $period) { $0.short }
+                    PillPicker(options: Period.overview, selection: $period) { $0.short }
 
                     if let error, data == nil {
                         ErrorBanner(message: error) { Task { await load() } }
@@ -40,8 +41,12 @@ struct HomeView: View {
             }
             .canvasBackground()
             .toolbar(.hidden, for: .navigationBar)
-            .refreshable { await load() }
+            .refreshable { Feedback.play(.tap); await load() }
             .task(id: "\(period.rawValue)-\(mode.rawValue)-\(changes.version)") { await load() }
+            .onChange(of: mode) { _, m in
+                SharedStore.currencyMode = m.rawValue   // widgets follow the same currency view
+                WidgetCenter.shared.reloadAllTimelines()
+            }
             .navigationDestination(for: Txn.self) { TransactionDetailView(txn: $0) }
         }
     }
@@ -78,6 +83,11 @@ struct HomeView: View {
             Text(Quip.forChange(s.change_pct))
                 .font(.system(size: 15, weight: .medium, design: .rounded))
                 .foregroundStyle(.white.opacity(0.7))
+            if let ex = data?.excluded?[currency], ex.total > 0 {
+                Label("\(Money.format(ex.total, currency)) in Exclusions not counted", systemImage: "eye.slash")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.5))
+            }
             if let c = data?.combined, let rate = c.fx_rate {
                 Label("SGD + INR combined at ₹\(rate.formatted(.number.precision(.fractionLength(2))))/S$ · \(c.fx_date ?? "")",
                       systemImage: "arrow.triangle.merge")

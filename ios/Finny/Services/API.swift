@@ -70,6 +70,12 @@ struct API {
     }
 
     func splits() async throws -> Splits { try await get("splits", [:]) }
+
+    func merchants() async throws -> [MerchantInfo] { (try await get("merchants", [:]) as MerchantPage).merchants }
+
+    func breakdown(_ spec: InsightSpec, combine: String?) async throws -> [String: Breakdown] {
+        try await get("breakdown", spec.query(combine: combine).mapValues { Optional($0) })
+    }
     func subscriptions() async throws -> [Subscription] { try await get("subscriptions", [:]) }
     func meta() async throws -> Meta { try await get("meta", [:]) }
 

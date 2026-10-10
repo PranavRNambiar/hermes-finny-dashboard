@@ -217,6 +217,7 @@ struct TxnSections: View {
                         ForEach(group.txns) { t in
                             NavigationLink(value: t) { TransactionRow(txn: t) }
                                 .buttonStyle(.plain)
+                                .simultaneousGesture(TapGesture().onEnded { Feedback.play(.tap) })
                                 .onAppear { if t.id == feed.items.last?.id { Task { await feed.loadMore(API(auth: auth)) } } }
                             if t.id != group.txns.last?.id { Perforation().padding(.leading, 52) }
                         }
@@ -398,7 +399,7 @@ struct IncomingSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            PillPicker(options: Period.allCases, selection: $period) { $0.short }
+            PillPicker(options: Period.overview, selection: $period) { $0.short }
             if loading {
                 ProgressView().tint(Palette.ink).frame(maxWidth: .infinity).padding(.vertical, 40)
             } else if items.isEmpty {
