@@ -9,14 +9,15 @@
 #
 # Requirements (one-time):
 #   - App Store Connect API key .p8 in ~/private_keys/AuthKey_<KEY_ID>.p8
-#   - ASC_ISSUER_ID exported (App Store Connect → Users and Access → Integrations)
+#   - Issuer ID in ~/private_keys/asc_issuer_id (or ASC_ISSUER_ID env); see App Store Connect → Users and Access → Integrations
 #   - Xcode signed in to team 9U72AVU3KH (Settings → Accounts)
 #
 set -euo pipefail
 cd "$(dirname "$0")"
 
 KEY_ID="${ASC_KEY_ID:-U3K949UW4G}"
-ISSUER_ID="${ASC_ISSUER_ID:?export ASC_ISSUER_ID first}"
+ISSUER_ID="${ASC_ISSUER_ID:-$(cat "$HOME/private_keys/asc_issuer_id" 2>/dev/null)}"
+[ -n "$ISSUER_ID" ] || { echo "No issuer ID: put it in ~/private_keys/asc_issuer_id or export ASC_ISSUER_ID"; exit 1; }
 # Signing uses the Apple ID signed in to Xcode (the API key lacks cloud-signing rights);
 # the API key is only used for the upload.
 
