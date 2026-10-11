@@ -702,6 +702,29 @@ export async function setIncomingKind(id: string, kind: string, applyToCounterpa
   return { kind, counterparty: row.counterparty, all: applyToCounterparty };
 }
 
+/** Money in that never arrives as an email (e.g. a stipend by GIRO with no alert). Stored like any other row, id "manual:…". */
+export async function addIncoming(b: { amount: number; currency: string; counterparty: string; kind: string; txn_date: string; card?: string }) {
+  if (!(b.amount > 0)) throw new Error("amount must be positive");
+  if (!["SGD", "INR"].includes(b.currency)) throw new Error("currency must be SGD or INR");
+  if (!(INCOMING_KINDS as readonly string[]).includes(b.kind)) throw new Error("unknown kind");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(b.txn_date ?? "")) throw new Error("txn_date must be YYYY-MM-DD");
+  const name = (b.counterparty ?? "").trim().slice(0, 80);
+  if (!name) throw new Error("who it came from is required");
+  const row = { id: `manual:${crypto.randomUUID()}`, card: (b.card ?? "dbs").toLowerCase().slice(0, 20), currency: b.currency,
+    amount: Math.round(b.amount * 100) / 100, counterparty: name, kind: b.kind, raw_desc: "Added by hand", txn_date: b.txn_date, txn_time: null };
+  const { error } = await db().from("incoming").insert(row);
+  if (error) throw new Error(error.message);
+  return row;
+}
+
+/** Only hand-added rows can be deleted; alert-backed ones would just come back on the next scan. */
+export async function deleteIncoming(id: string) {
+  if (!id.startsWith("manual:")) throw new Error("only money in you added by hand can be deleted");
+  const { error } = await db().from("incoming").delete().eq("id", id);
+  if (error) throw new Error(error.message);
+  return { deleted: id };
+}
+
 // ── Insight builder + widgets ──────────────────────────────
 
 /** Every merchant (custom names applied) with spend and visit count, most-visited first. */

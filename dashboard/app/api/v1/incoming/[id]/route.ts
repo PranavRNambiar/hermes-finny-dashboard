@@ -1,4 +1,4 @@
-import { setIncomingKind } from "@/lib/finny/data";
+import { deleteIncoming, setIncomingKind } from "@/lib/finny/data";
 import { json, preflight, withAuth } from "@/lib/finny/http";
 
 export const dynamic = "force-dynamic";
@@ -14,6 +14,16 @@ export const PATCH = (req: Request, { params }: { params: { id: string } }) =>
       } catch (e) {
         return json({ error: (e as Error).message }, 400);
       }
+    },
+    "finny.write"
+  );
+
+export const DELETE = (req: Request, { params }: { params: { id: string } }) =>
+  withAuth(
+    req,
+    async () => {
+      try { return await deleteIncoming(decodeURIComponent(params.id)); }
+      catch (e) { return json({ error: (e as Error).message }, 400); }
     },
     "finny.write"
   );

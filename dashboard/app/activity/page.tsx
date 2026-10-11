@@ -1,7 +1,7 @@
 "use client";
 
 import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowDownLeft, ArrowLeftRight, Briefcase, RotateCcw, Search, X } from "lucide-react";
+import { ArrowDownLeft, ArrowLeftRight, Briefcase, Plus, RotateCcw, Search, Trash2, X } from "lucide-react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useRef, useState } from "react";
 import { useHotkey } from "@/components/app";
@@ -120,6 +120,7 @@ const KINDS = [
 function Received() {
   const [period, setPeriod] = useState<Period>("this_month");
   const [editing, setEditing] = useState<Incoming | null>(null);
+  const [adding, setAdding] = useState(false);
   const qc = useQueryClient();
   const { data, isLoading } = useQuery({ queryKey: ["incoming", period], queryFn: () => api<{ incoming: Incoming[] }>("incoming", { period }) });
   const items = data?.incoming ?? [];
@@ -128,7 +129,10 @@ function Received() {
 
   return (
     <>
-      <Pills className="mb-4 max-w-[520px]" options={OVERVIEW_PERIODS.map((p) => ({ id: p.id, label: p.short }))} value={period} onChange={setPeriod} />
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <Pills className="max-w-[520px] flex-1" options={OVERVIEW_PERIODS.map((p) => ({ id: p.id, label: p.short }))} value={period} onChange={setPeriod} />
+        <button onClick={() => setAdding(true)} className="flex h-9 items-center gap-1.5 rounded-full bg-ink px-4 text-[13px] font-bold text-surface"><Plus size={14} /> Add money in</button>
+      </div>
       {isLoading ? <Spinner /> : items.length === 0 ? <Empty emoji="💸" title="Nothing came in" text="Salary, PayNow received, refunds and top-ups appear here as their alerts arrive." /> : (
         <>
           <div className="mb-4 flex gap-3">
@@ -158,6 +162,7 @@ function Received() {
         </>
       )}
       {editing && <KindDialog item={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); qc.invalidateQueries(); }} />}
+      {adding && <AddIncomingDialog onClose={() => setAdding(false)} onSaved={() => { setAdding(false); qc.invalidateQueries(); }} />}
     </>
   );
 }
@@ -188,7 +193,44 @@ function KindDialog({ item, onClose, onSaved }: { item: Incoming; onClose: () =>
         </label>
         {err && <div className="text-[13px] text-coral">{err}</div>}
         <button onClick={save} className="h-12 w-full rounded-2xl bg-ink font-bold text-surface">Save</button>
+        {item.id.startsWith("manual:") && (
+          <button onClick={async () => { try { await send("DELETE", `incoming/${encId(item.id)}`, {}); onSaved(); } catch (e) { setErr((e as Error).message); } }}
+            className="flex h-10 w-full items-center justify-center gap-1.5 rounded-2xl text-[13px] font-bold text-coral hover:bg-canvas"><Trash2 size={14} /> Delete this entry</button>
+        )}
       </div>
+    </div>
+  );
+}
+
+/** For money that arrives without an email alert, e.g. a stipend paid by GIRO. */
+function AddIncomingDialog({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
+  const [form, setForm] = useState({ counterparty: "", amount: "", currency: "SGD", kind: "salary", txn_date: new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Singapore" }) });
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setForm({ ...form, [k]: e.target.value });
+  const save = async () => {
+    setBusy(true);
+    try { await send("POST", "incoming", { ...form, amount: Number(form.amount) }); onSaved(); }
+    catch (e) { setErr((e as Error).message); setBusy(false); }
+  };
+  const field = "mt-1 w-full rounded-xl bg-canvas px-3 py-2.5 text-[15px] font-semibold text-ink outline-none";
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onMouseDown={onClose}>
+      <form onSubmit={(e) => { e.preventDefault(); save(); }} className="w-full max-w-[420px] space-y-3 rounded-[24px] bg-surface p-6" onMouseDown={(e) => e.stopPropagation()}>
+        <div className="display text-[22px]">Add money in</div>
+        <p className="text-[13px] text-ink-soft">For money that arrives without an email alert, like a stipend paid by GIRO.</p>
+        <label className="block text-[12px] font-semibold text-muted">From<input autoFocus required value={form.counterparty} onChange={set("counterparty")} placeholder="e.g. Internship stipend" className={field} /></label>
+        <div className="flex gap-2">
+          <label className="flex-1 text-[12px] font-semibold text-muted">Amount<input required type="number" step="0.01" min="0.01" value={form.amount} onChange={set("amount")} placeholder="2500" className={field} /></label>
+          <label className="w-24 text-[12px] font-semibold text-muted">Currency<select value={form.currency} onChange={set("currency")} className={field}><option>SGD</option><option>INR</option></select></label>
+        </div>
+        <div className="flex gap-2">
+          <label className="flex-1 text-[12px] font-semibold text-muted">Date<input required type="date" value={form.txn_date} onChange={set("txn_date")} className={field} /></label>
+          <label className="flex-1 text-[12px] font-semibold text-muted">Kind<select value={form.kind} onChange={set("kind")} className={field}>{KINDS.map((k) => <option key={k.id} value={k.id}>{k.label}</option>)}</select></label>
+        </div>
+        {err && <div className="text-[13px] text-coral">{err}</div>}
+        <button disabled={busy} className="h-12 w-full rounded-2xl bg-ink font-bold text-surface disabled:opacity-50">{busy ? "Saving…" : "Add"}</button>
+      </form>
     </div>
   );
 }

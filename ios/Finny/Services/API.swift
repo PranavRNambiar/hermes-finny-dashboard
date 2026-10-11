@@ -135,6 +135,16 @@ struct API {
         let _: Ignored = try await send("PATCH", "incoming/\(API.encodeID(id))", ["kind": kind, "apply_to_counterparty": applyToSender])
     }
 
+    /// Money in with no email alert behind it (e.g. a stipend by GIRO).
+    func addIncoming(amount: Double, currency: String, from name: String, kind: String, date: Date) async throws {
+        let _: Ignored = try await send("POST", "incoming", ["amount": amount, "currency": currency, "counterparty": name,
+                                                             "kind": kind, "txn_date": DateFormatter.isoDay.string(from: date)])
+    }
+
+    func deleteIncoming(id: String) async throws {
+        let _: Ignored = try await send("DELETE", "incoming/\(API.encodeID(id))", [:])
+    }
+
     /// Custom display name for a merchant (all past and future transactions). nil resets it.
     func rename(merchant raw: String, to name: String?) async throws {
         let _: Ignored = try await send("POST", "merchants/rename", ["merchant": raw, "display_name": name ?? NSNull()])

@@ -61,6 +61,13 @@ SKIP AU Bank "Payment Alert" emails ("Payment of Rs.X was credited to your Card"
 INCOMING money — return the same fields with "direction": "in", "merchant" = who the money came from, and a "kind":
 - DBS "You've received a transfer" / "You have received SGD X via PayNow/FAST/GIRO on DD Mon YYYY HH:MM SGT. From: NAME" → merchant = NAME.
   kind "salary" if the text says salary, payroll, SAL or GIRO from an employer, or the payer is clearly a company/institution paying a large round-ish amount; otherwise kind "transfer".
+- DBS/POSB "iBanking Alerts" / "digibank Alerts" for any CREDIT into the account — wording like "Incoming Fund Transfer",
+  "funds have been credited to your account", "You have received SGD X via FAST/GIRO/Funds Transfer/Telegraphic Transfer",
+  "Salary credit", "Inward remittance" → direction "in", merchant = the payer/"From" name (or the transfer description if no name).
+  Same salary rule as above: GIRO/FAST from a company, university or institution (e.g. an internship stipend) → kind "salary".
+- DBS PayLah! alerts for money RECEIVED into the wallet ("You've received S$X from NAME", "NAME sent you S$X",
+  "Money received", "PayNow received") → direction "in", kind "transfer", merchant = NAME.
+  PayLah! alerts for payments you MADE ("You've paid", "sent to", "Paid to") stay direction "out" as before.
 - Scapia "Your transaction has been reversed" or "Your refund is here" (Amount ₹X, Merchant M) → kind "refund", merchant = M. Use the email's date if the body has none.
 - Wise "You added X SGD to your account" / "Money added" → kind "own_transfer", merchant "Wise top-up".
 - Wise "You received X from NAME" → kind "transfer" (or "salary" by the same rule as DBS), merchant = NAME.

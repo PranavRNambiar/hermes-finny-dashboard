@@ -450,10 +450,19 @@ struct IncomingSection: View {
     @State private var items: [Incoming] = []
     @State private var loading = true
     @State private var editing: Incoming?
+    @State private var adding = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             PillPicker(options: Period.overview, selection: $period) { $0.short }
+            Button { Feedback.play(.tap); adding = true } label: {
+                Label("Add money in", systemImage: "plus")
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .foregroundStyle(Palette.surface)
+                    .padding(.horizontal, 14).frame(height: 34)
+                    .background(Palette.ink, in: .capsule)
+            }
+            .buttonStyle(.plain)
             if loading {
                 ProgressView().tint(Palette.ink).frame(maxWidth: .infinity).padding(.vertical, 40)
             } else if items.isEmpty {
@@ -483,6 +492,7 @@ struct IncomingSection: View {
             loading = false
         }
         .sheet(item: $editing) { i in IncomingKindSheet(item: i) }
+        .sheet(isPresented: $adding) { AddIncomingSheet() }
     }
 
     private var totals: some View {
@@ -574,6 +584,13 @@ private struct IncomingKindSheet: View {
                     .card(padding: 16)
                     if let error { Text(error).font(.footnote).foregroundStyle(Palette.coral) }
                     Button("Save") { save() }.buttonStyle(InkButtonStyle())
+                    if item.id.hasPrefix("manual:") {
+                        Button(role: .destructive) { remove() } label: {
+                            Label("Delete this entry", systemImage: "trash")
+                                .font(.system(size: 14, weight: .bold, design: .rounded)).foregroundStyle(Palette.coral)
+                                .frame(maxWidth: .infinity).frame(height: 44)
+                        }
+                    }
                 }
                 .padding(20)
             }
@@ -589,6 +606,17 @@ private struct IncomingKindSheet: View {
         .onAppear { kind = IncomingKind(rawValue: item.kind) ?? .transfer }
     }
 
+    private func remove() {
+        Task {
+            do {
+                try await API(auth: auth).deleteIncoming(id: item.id)
+                Feedback.play(.warning)
+                changes.bump()
+                dismiss()
+            } catch { self.error = error.localizedDescription }
+        }
+    }
+
     private func save() {
         Task {
             do {
@@ -596,6 +624,73 @@ private struct IncomingKindSheet: View {
                 changes.bump()
                 dismiss()
             } catch { self.error = error.localizedDescription }
+        }
+    }
+}
+
+/// For money that arrives without an email alert, like a stipend paid by GIRO.
+private struct AddIncomingSheet: View {
+    @Environment(Auth.self) private var auth
+    @Environment(DataChanges.self) private var changes
+    @Environment(\.dismiss) private var dismiss
+    @State private var name = ""
+    @State private var amount = ""
+    @State private var currency = "SGD"
+    @State private var kind: IncomingKind = .salary
+    @State private var date = Date.now
+    @State private var saving = false
+    @State private var error: String?
+
+    private var value: Double? { Double(amount.replacingOccurrences(of: ",", with: "")) }
+    private var ok: Bool { !name.trimmingCharacters(in: .whitespaces).isEmpty && (value ?? 0) > 0 }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("From (e.g. Internship stipend)", text: $name)
+                    HStack {
+                        TextField("Amount", text: $amount).keyboardType(.decimalPad)
+                        Picker("", selection: $currency) { Text("SGD").tag("SGD"); Text("INR").tag("INR") }
+                            .pickerStyle(.segmented).frame(width: 120)
+                    }
+                    DatePicker("Date", selection: $date, in: ...Date.now, displayedComponents: .date)
+                    Picker("Kind", selection: $kind) {
+                        ForEach(IncomingKind.allCases) { Text($0.label).tag($0) }
+                    }
+                } footer: {
+                    Text("For money that arrives without an email alert, like a stipend paid by GIRO.")
+                }
+                if let error { Text(error).foregroundStyle(Palette.coral) }
+            }
+            .font(.system(size: 16, weight: .medium, design: .rounded))
+            .tint(Palette.mint)
+            .navigationTitle("Add money in")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(saving ? "Saving…" : "Add") { save() }.fontWeight(.bold).disabled(!ok || saving)
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    private func save() {
+        guard let value else { return }
+        saving = true
+        Task {
+            do {
+                try await API(auth: auth).addIncoming(amount: value, currency: currency, from: name.trimmingCharacters(in: .whitespaces),
+                                                      kind: kind.rawValue, date: date)
+                Feedback.play(.success)
+                changes.bump()
+                dismiss()
+            } catch {
+                self.error = error.localizedDescription
+                saving = false
+            }
         }
     }
 }
