@@ -1,229 +1,121 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { CheckCircleIcon, UsersIcon } from "@/components/Icons";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { CheckCircle2, ChevronDown, Undo2 } from "lucide-react";
+import { useState } from "react";
+import { useApp } from "@/components/app";
+import { Amount, Card, Empty, Eyebrow, Perf, ScreenHeader, Spinner } from "@/components/ui";
+import { api, money, prettyMerchant, send } from "@/lib/ui/finny";
 
-interface SplitEntry {
-  id: number;
-  transaction_id: string;
-  merchant: string | null;
-  txn_date: string | null;
-  amount: number | null;
-  share_amount: number;
-  divide_synced: boolean;
-}
+type Person = { person_id: number | null; name: string; currency: string; total: number;
+  items: { split_id: number; transaction_id: string; merchant: string | null; txn_date: string | null; share_amount: number }[] };
+type Settlement = { person_id: number; name: string; settled_at: string; currency: string; total: number;
+  items: { split_id: number; merchant: string | null; txn_date: string | null; share_amount: number }[] };
 
-interface PersonGroup {
-  person_id: number;
-  name: string;
-  currency: string;
-  divide_linked: boolean;
-  total: number;
-  count: number;
-  splits: SplitEntry[];
-}
-
-interface Cashflow {
-  settled_lifetime_by_currency: Record<string, number>;
-  avg_days_to_settle: number | null;
-  settled_count: number;
-}
-
-const AVATAR_COLORS = ["#6366f1", "#14b8a6", "#f97316", "#ec4899", "#8b5cf6", "#22c55e", "#f59e0b"];
-
-function avatarColor(name: string): string {
-  let hash = 0;
-  for (let i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) % AVATAR_COLORS.length;
-  return AVATAR_COLORS[Math.abs(hash)];
-}
-
-function fmt(amount: number, currency: string): string {
-  return currency === "SGD" ? `S$${amount.toFixed(2)}` : `₹${amount.toFixed(2)}`;
-}
+const initials = (n: string) => n.split(" ").slice(0, 2).map((w) => w[0]).join("").toUpperCase();
 
 export default function SplitsPage() {
-  const [groups, setGroups] = useState<PersonGroup[]>([]);
-  const [cashflow, setCashflow] = useState<Cashflow | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [settling, setSettling] = useState<string | null>(null);
+  const qc = useQueryClient();
+  const { openTxn } = useApp();
+  const owed = useQuery({ queryKey: ["splits"], queryFn: () => api<{ owed_to_me: Person[]; totals_by_currency: Record<string, number> }>("splits") });
+  const history = useQuery({ queryKey: ["settlements"], queryFn: () => api<{ settlements: Settlement[] }>("splits/history") });
+  const [open, setOpen] = useState<string | null>(null);
+  const [confirm, setConfirm] = useState<Person | null>(null);
+  const [undo, setUndo] = useState<{ name: string; person_id: number; at: string } | null>(null);
 
-  async function load() {
-    setLoading(true);
-    const res = await fetch("/api/splits");
-    const data = await res.json();
-    setGroups(data.by_person ?? []);
-    setCashflow(data.cashflow ?? null);
-    setLoading(false);
+  async function markPaid(p: Person) {
+    setConfirm(null);
+    await send("POST", "splits/settle", { person_id: p.person_id, currency: p.currency });
+    await qc.invalidateQueries();
+    const h = await api<{ settlements: Settlement[] }>("splits/history");
+    const s = h.settlements.find((x) => x.person_id === p.person_id);
+    if (s) { setUndo({ name: p.name, person_id: s.person_id, at: s.settled_at }); setTimeout(() => setUndo((u) => (u?.at === s.settled_at ? null : u)), 8000); }
+  }
+  async function revive(person_id: number, at: string) {
+    await send("POST", "splits/unsettle", { person_id, settled_at: at });
+    setUndo(null);
+    await qc.invalidateQueries();
   }
 
-  useEffect(() => {
-    load();
-    const onFocus = () => load();
-    window.addEventListener("focus", onFocus);
-    return () => window.removeEventListener("focus", onFocus);
-  }, []);
-
-  async function settlePerson(group: PersonGroup) {
-    const key = `${group.person_id}:${group.currency}`;
-    setSettling(key);
-    await fetch("/api/splits", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        action: "settle_person",
-        person_id: group.person_id,
-        currency: group.currency,
-      }),
-    });
-    await load();
-    setSettling(null);
-  }
-
-  const totals: Record<string, number> = {};
-  let totalCount = 0;
-  groups.forEach((g) => {
-    totals[g.currency] = (totals[g.currency] ?? 0) + g.total;
-    totalCount += g.count;
-  });
-
+  const people = owed.data?.owed_to_me ?? [];
   return (
-    <div className="space-y-4">
-      {/* Hero summary card */}
-      <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-emerald-500 to-teal-600 text-white p-5 shadow-lg shadow-emerald-600/20">
-        <div className="absolute -right-10 -top-10 w-36 h-36 rounded-full bg-white/10" />
-        <div className="absolute right-6 bottom-2 w-16 h-16 rounded-full bg-white/10" />
-        <div className="relative flex items-center justify-between mb-3">
-          <p className="text-xs font-medium text-emerald-100 uppercase tracking-wider">Owed to you</p>
-          <button
-            onClick={load}
-            disabled={loading}
-            className="text-emerald-200 hover:text-white transition-colors disabled:opacity-40"
-            aria-label="Refresh"
-          >
-            <svg className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-            </svg>
-          </button>
-        </div>
-        <div className="relative flex items-end gap-6">
-          <div>
-            <p className="text-3xl font-bold tracking-tight">S${(totals.SGD ?? 0).toFixed(2)}</p>
-          </div>
-          <div className="h-10 w-px bg-white/20" />
-          <div>
-            <p className="text-3xl font-bold tracking-tight">₹{(totals.INR ?? 0).toFixed(2)}</p>
-          </div>
-        </div>
-        <p className="relative text-xs text-emerald-100 mt-2">
-          {totalCount} pending split{totalCount !== 1 ? "s" : ""} across {groups.length} group{groups.length !== 1 ? "s" : ""}
-        </p>
-      </div>
-
-      {/* Per-person groups */}
-      <div className="space-y-3">
-        {groups.map((g) => {
-          const key = `${g.person_id}:${g.currency}`;
-          const color = avatarColor(g.name);
-          return (
-            <div key={key} className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
-              <div className="flex items-center justify-between px-4 py-3.5 border-b border-gray-50">
-                <div className="flex items-center gap-3">
-                  <div
-                    className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold shrink-0"
-                    style={{ backgroundColor: color + "1a", color }}
-                  >
-                    {g.name.charAt(0).toUpperCase()}
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-1.5">
-                      <p className="text-sm font-semibold text-gray-900">{g.name}</p>
-                      {g.divide_linked && (
-                        <span className="text-[10px] font-semibold text-emerald-600 bg-emerald-50 rounded-full px-1.5 py-0.5">
-                          Divide
-                        </span>
-                      )}
-                    </div>
-                    <p className="text-xs text-gray-400">
-                      {g.count} transaction{g.count !== 1 ? "s" : ""} · {g.currency}
-                    </p>
-                  </div>
-                </div>
-                <div className="text-right">
-                  <p className="text-sm font-bold text-gray-900 tabular-nums mb-1">{fmt(g.total, g.currency)}</p>
-                  <button
-                    onClick={() => settlePerson(g)}
-                    disabled={settling === key}
-                    className="flex items-center gap-1 text-xs font-medium text-emerald-600 hover:text-emerald-700 disabled:text-gray-300 transition-colors ml-auto"
-                  >
-                    <CheckCircleIcon className="w-3.5 h-3.5" />
-                    {settling === key ? "Settling…" : "Mark settled"}
+    <>
+      <ScreenHeader eyebrow="Bills you fronted" title="Splits" />
+      <div className="grid gap-4 lg:grid-cols-[1.2fr_1fr]">
+        <Card title="Who owes you" trailing={Object.entries(owed.data?.totals_by_currency ?? {}).map(([c, v]) => money(v, c)).join(" · ")}>
+          {owed.isLoading ? <Spinner /> : people.length === 0 ? (
+            <Empty emoji="🤝" title="All square" text="Nobody owes you a thing. Rare. Split a bill from any transaction (press S)." />
+          ) : people.map((p, i) => {
+            const key = `${p.person_id}-${p.currency}`;
+            return (
+              <div key={key}>
+                <div className="flex items-center gap-3 py-3">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-full bg-mint-soft text-[14px] font-bold text-mint">{initials(p.name)}</div>
+                  <button onClick={() => setOpen(open === key ? null : key)} className="flex flex-1 items-center gap-1.5 text-left">
+                    <span><span className="block text-[15px] font-semibold text-ink">{p.name}</span><span className="text-[12px] text-muted">{p.items.length} unsettled</span></span>
+                    <ChevronDown size={14} className={`text-muted transition-transform ${open === key ? "rotate-180" : ""}`} />
                   </button>
+                  <Amount value={p.total} currency={p.currency} size={17} className="text-ink" />
+                  {p.person_id != null && (
+                    <button onClick={() => setConfirm(p)} className="ml-2 h-8 rounded-full bg-mint-soft px-3 text-[12px] font-bold text-mint hover:bg-mint hover:text-white">Paid</button>
+                  )}
                 </div>
-              </div>
-
-              {g.splits.map((s) => (
-                <div
-                  key={s.id}
-                  className="flex items-center justify-between px-4 py-2.5 border-b border-gray-50 last:border-b-0"
-                >
-                  <div>
-                    <div className="flex items-center gap-1.5">
-                      <p className="text-sm text-gray-700">{s.merchant || "Unknown"}</p>
-                      {s.divide_synced && (
-                        <span className="text-[9px] font-semibold text-violet-500 bg-violet-50 rounded-full px-1.5 py-0.5 leading-none">
-                          ÷ Divide
-                        </span>
-                      )}
-                    </div>
-                    <p className="text-xs text-gray-400">{s.txn_date}</p>
+                {open === key && (
+                  <div className="mb-2 ml-[52px] space-y-1">
+                    {p.items.map((it) => (
+                      <button key={it.split_id} onClick={() => openTxn(it.transaction_id)} className="flex w-full justify-between rounded-lg px-2 py-1 text-[13px] text-ink-soft hover:bg-canvas">
+                        <span className="truncate">{prettyMerchant(it.merchant ?? "—")} <span className="text-muted">· {it.txn_date}</span></span>
+                        <span className="tabular">{money(it.share_amount, p.currency)}</span>
+                      </button>
+                    ))}
                   </div>
-                  <p className="text-sm font-medium text-gray-900 tabular-nums">{fmt(s.share_amount, g.currency)}</p>
+                )}
+                {i < people.length - 1 && <Perf className="ml-[52px]" />}
+              </div>
+            );
+          })}
+        </Card>
+
+        <Card title="Settled history">
+          {(history.data?.settlements ?? []).length === 0 ? <p className="text-[13px] text-ink-soft">Nothing settled yet.</p> :
+            history.data!.settlements.slice(0, 20).map((h, i) => (
+              <div key={`${h.person_id}|${h.settled_at}`}>
+                <div className="flex items-center gap-3 py-2.5">
+                  <CheckCircle2 size={20} className="shrink-0 text-mint" />
+                  <div className="flex-1">
+                    <div className="text-[14px] font-semibold text-ink">{h.name}</div>
+                    <div className="text-[12px] text-muted">Paid {new Date(h.settled_at).toLocaleString("en-SG", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })} · {h.items.length} item{h.items.length === 1 ? "" : "s"}</div>
+                  </div>
+                  <span className="text-ink-soft"><Amount value={h.total} currency={h.currency} size={15} /></span>
+                  <button onClick={() => revive(h.person_id, h.settled_at)} title="Mark as unpaid"
+                    className="flex h-8 items-center gap-1 rounded-full px-2.5 text-[12px] font-bold text-coral hover:bg-canvas"><Undo2 size={13} /> Unpaid</button>
                 </div>
-              ))}
-            </div>
-          );
-        })}
+                {i < Math.min(20, history.data!.settlements.length) - 1 && <Perf />}
+              </div>
+            ))}
+        </Card>
       </div>
 
-      {/* Cashflow / cash conversion cycle */}
-      {cashflow && cashflow.settled_count > 0 && (
-        <div className="bg-white rounded-3xl shadow-sm border border-gray-100 p-5">
-          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-4">Cashflow</p>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <p className="text-2xl font-bold text-gray-900 tabular-nums">
-                {cashflow.avg_days_to_settle != null ? cashflow.avg_days_to_settle.toFixed(1) : "—"}
-                <span className="text-sm font-medium text-gray-400 ml-1">days</span>
-              </p>
-              <p className="text-xs text-gray-400 mt-0.5">Avg to get paid back</p>
-            </div>
-            <div>
-              <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
-                {Object.entries(cashflow.settled_lifetime_by_currency).map(([cur, amt]) => (
-                  <p key={cur} className="text-2xl font-bold text-gray-900 tabular-nums">
-                    {fmt(amt, cur)}
-                  </p>
-                ))}
-              </div>
-              <p className="text-xs text-gray-400 mt-0.5">Collected lifetime</p>
+      {confirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onMouseDown={() => setConfirm(null)}>
+          <div className="w-full max-w-[380px] rounded-[24px] bg-surface p-6 text-center" onMouseDown={(e) => e.stopPropagation()}>
+            <Eyebrow>Mark as paid</Eyebrow>
+            <div className="display mt-2 text-[22px]">{confirm.name} paid you</div>
+            <div className="my-2 text-mint"><Amount value={confirm.total} currency={confirm.currency} size={34} weight={700} /></div>
+            <p className="text-[13px] text-ink-soft">Clears {confirm.items.length} item{confirm.items.length === 1 ? "" : "s"}. You can undo this from Settled history.</p>
+            <div className="mt-5 flex gap-2">
+              <button onClick={() => setConfirm(null)} className="h-11 flex-1 rounded-2xl bg-canvas font-semibold text-ink">Cancel</button>
+              <button autoFocus onClick={() => markPaid(confirm)} className="h-11 flex-1 rounded-2xl bg-ink font-bold text-surface">Mark paid</button>
             </div>
           </div>
         </div>
       )}
-
-      {/* Empty state */}
-      {!loading && groups.length === 0 && (
-        <div className="text-center py-20 text-gray-400">
-          <div className="w-14 h-14 rounded-full bg-white border border-gray-100 shadow-sm flex items-center justify-center mx-auto mb-3">
-            <UsersIcon className="w-6 h-6 text-gray-300" />
-          </div>
-          <p className="text-sm">No outstanding splits</p>
+      {undo && (
+        <div className="fixed bottom-24 left-1/2 z-50 flex -translate-x-1/2 items-center gap-4 rounded-full bg-ink px-5 py-3 text-[13px] font-semibold text-surface shadow-lg md:bottom-8">
+          {undo.name} marked as paid
+          <button onClick={() => revive(undo.person_id, undo.at)} className="font-bold text-[var(--mint)]">Undo</button>
         </div>
       )}
-
-      {loading && (
-        <div className="text-center mt-6 text-sm text-gray-400 py-4">Loading…</div>
-      )}
-    </div>
+    </>
   );
 }

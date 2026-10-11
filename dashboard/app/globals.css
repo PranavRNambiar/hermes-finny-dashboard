@@ -2,26 +2,57 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Finny design language — mirrors ios/Shared/Theme.swift (Palette). */
 :root {
-  --background: #f6f6f9;
-  --foreground: #171717;
+  --canvas: #F0F1F5;
+  --surface: #FFFFFF;
+  --sunken: #E6E8EF;
+  --ink: #1C2547;
+  --ink-soft: #5F6485;
+  --muted: #979DB5;
+  --hairline: #DDE0EA;
+  --mint: #12B886;
+  --mint-soft: #DDF6EC;
+  --coral: #E8590C;
+  --ink-card: #0E2A2F;
+  --ink-card-hi: #16444B;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --canvas: #0B0F14;
+    --surface: #151B23;
+    --sunken: #1D2530;
+    --ink: #EEF1F8;
+    --ink-soft: #A3A9C2;
+    --muted: #6B7290;
+    --hairline: #263040;
+    --mint: #3DDBA5;
+    --mint-soft: #113A2E;
+    --coral: #FF8A4C;
+    color-scheme: dark;
+  }
 }
 
-body {
-  color: var(--foreground);
-  background: var(--background);
+html, body { background: var(--canvas); color: var(--ink); }
+body { font-family: var(--font-rounded), ui-rounded, "SF Pro Rounded", system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+
+@layer components {
+  .card { @apply rounded-[24px] bg-surface p-[18px]; }
+  .eyebrow { @apply text-[11px] font-semibold uppercase tracking-[0.11em] text-muted; }
+  .display { @apply font-bold tracking-tight text-ink; }
+  .tabular { font-variant-numeric: tabular-nums; }
+  /* Dashed receipt perforation */
+  .perf { height: 1.5px; background-image: radial-gradient(circle, var(--hairline) 1px, transparent 1.4px); background-size: 7px 1.5px; background-repeat: repeat-x; }
+  .perf-light { background-image: radial-gradient(circle, rgba(255,255,255,.2) 1px, transparent 1.4px); }
+  /* Torn-receipt bottom edge */
+  .receipt { -webkit-mask: radial-gradient(7px at 50% 100%, #0000 98%, #000) 50% 100% / 14px 100% repeat-x;
+             mask: radial-gradient(7px at 50% 100%, #0000 98%, #000) 50% 100% / 14px 100% repeat-x; padding-bottom: 30px; }
+  .ink-card { background: linear-gradient(225deg, var(--ink-card-hi), var(--ink-card)); }
+  .kbd { @apply inline-flex h-[20px] min-w-[20px] items-center justify-center rounded-md border border-hairline bg-surface px-1.5 text-[11px] font-semibold text-ink-soft; }
 }
 
 @layer utilities {
-  .text-balance {
-    text-wrap: balance;
-  }
-
-  .scrollbar-hide {
-    scrollbar-width: none;
-    -ms-overflow-style: none;
-  }
-  .scrollbar-hide::-webkit-scrollbar {
-    display: none;
-  }
+  .scrollbar-hide { scrollbar-width: none; -ms-overflow-style: none; }
+  .scrollbar-hide::-webkit-scrollbar { display: none; }
 }
