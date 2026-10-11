@@ -56,6 +56,12 @@ struct API {
         let _: Ignored = try await send("POST", "splits/settle", ["person_id": personID, "currency": currency])
     }
 
+    func settlements() async throws -> [Settlement] { (try await get("splits/history", [:]) as SettlementPage).settlements }
+
+    func unsettle(personID: Int, settledAt: String) async throws {
+        let _: Ignored = try await send("POST", "splits/unsettle", ["person_id": personID, "settled_at": settledAt])
+    }
+
     func incoming(period: Period) async throws -> [Incoming] {
         (try await get("incoming", ["period": period.rawValue]) as IncomingPage).incoming
     }

@@ -291,3 +291,19 @@ struct MerchantPage: Decodable { let merchants: [MerchantInfo] }
 enum FeedbackHook {
     @MainActor static var select: () -> Void = {}
 }
+
+struct Settlement: Decodable, Identifiable, Hashable {
+    struct Item: Decodable, Hashable { let split_id: Int; let merchant: String?; let txn_date: String?; let share_amount: Double }
+    let person_id: Int
+    let name: String
+    let settled_at: String
+    let currency: String
+    let total: Double
+    let items: [Item]
+    var id: String { "\(person_id)|\(settled_at)" }
+    var date: Date {
+        let f = ISO8601DateFormatter(); f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f.date(from: settled_at) ?? ISO8601DateFormatter().date(from: settled_at) ?? .now
+    }
+}
+struct SettlementPage: Decodable { let settlements: [Settlement] }

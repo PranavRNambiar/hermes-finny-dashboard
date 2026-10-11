@@ -736,3 +736,44 @@ export async function summary(combine?: Combine) {
   }
   return { as_of: new Date().toISOString(), today: todaySGT(), ranges, totals: out };
 }
+
+// ── Settlement history ─────────────────────────────────────
+// A "Mark as paid" stamps one settled_at on every split it settles, so splits that
+// share a person + settled_at are one settlement and can be undone together.
+
+export async function settlementHistory(limit = 50) {
+  const { data, error } = await db()
+    .from("transaction_splits")
+    .select("id, share_amount, currency, settled_at, transaction_id, people(id, name), transactions(merchant, txn_date)")
+    .eq("status", "settled")
+    .not("settled_at", "is", null)
+    .order("settled_at", { ascending: false })
+    .limit(2000);
+  if (error) throw new Error(error.message);
+  await ensureRules();
+  const batches = new Map<string, any>();
+  for (const r of data ?? []) {
+    const p = r.people as any, t = r.transactions as any;
+    const key = `${p?.id}|${r.settled_at}`;
+    const b = batches.get(key) ?? { person_id: p?.id, name: p?.name ?? "Unknown", settled_at: r.settled_at, currency: r.currency, total: 0, items: [] };
+    b.total = round2(b.total + Number(r.share_amount));
+    const rule = t?.merchant ? _rules.get(t.merchant) : undefined;
+    b.items.push({ split_id: r.id, merchant: rule?.display_name || t?.merchant || null, txn_date: t?.txn_date ?? null, share_amount: r.share_amount });
+    batches.set(key, b);
+  }
+  return { settlements: [...batches.values()].slice(0, limit) };
+}
+
+/** Undo a settlement: its splits go back to "owes you". */
+export async function unsettle(personId: number, settledAt: string) {
+  const { data, error } = await db()
+    .from("transaction_splits")
+    .update({ status: "pending", settled_at: null })
+    .eq("person_id", personId)
+    .eq("settled_at", settledAt)
+    .eq("status", "settled")
+    .select("id");
+  if (error) throw new Error(error.message);
+  resetSplits();
+  return { reopened: data?.length ?? 0 };
+}

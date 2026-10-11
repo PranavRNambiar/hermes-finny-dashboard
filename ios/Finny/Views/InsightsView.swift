@@ -7,6 +7,9 @@ struct InsightsView: View {
     @Environment(InsightsStore.self) private var store
     @AppStorage("currencyMode") private var mode: CurrencyMode = .sgd
     @State private var editing: InsightSpec?
+    @State private var confirmPaid: Splits.Person?
+    @State private var history: [Settlement] = []
+    @State private var undo: (name: String, personID: Int, at: String)?
     @State private var monthly: [String: Breakdown] = [:]
     @State private var tags: [String: Breakdown] = [:]
     @State private var subs: [Subscription] = []
@@ -30,6 +33,7 @@ struct InsightsView: View {
                         trend
                         tagsCard
                         owed
+                        settledHistory
                         subscriptions
                     }
                 }
@@ -41,6 +45,29 @@ struct InsightsView: View {
             .refreshable { await load() }
             .task(id: "\(mode.rawValue)-\(changes.version)") { await load() }
             .onChange(of: mode) { _, m in SharedStore.currencyMode = m.rawValue }
+            .confirmationDialog(confirmPaid.map { "Mark \($0.name) as paid?" } ?? "",
+                                isPresented: Binding(get: { confirmPaid != nil }, set: { if !$0 { confirmPaid = nil } }),
+                                titleVisibility: .visible, presenting: confirmPaid) { p in
+                Button("Paid \(Money.format(p.total, p.currency))") { Task { await markPaid(p) } }
+                Button("Cancel", role: .cancel) {}
+            } message: { p in
+                Text("Clears \(p.items.count) item\(p.items.count == 1 ? "" : "s"). You can undo this from Settled history.")
+            }
+            .overlay(alignment: .bottom) {
+                if let u = undo {
+                    HStack {
+                        Text("\(u.name) marked as paid").font(.system(size: 14, weight: .semibold, design: .rounded))
+                        Spacer()
+                        Button("Undo") { Task { await revive(personID: u.personID, at: u.at) } }
+                            .font(.system(size: 14, weight: .bold, design: .rounded)).foregroundStyle(Palette.mint)
+                    }
+                    .foregroundStyle(Palette.surface)
+                    .padding(.horizontal, 18).frame(height: 50)
+                    .background(Palette.ink, in: .capsule)
+                    .padding(.horizontal, 16).padding(.bottom, 90)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
             .sheet(item: $editing) { s in
                 InsightBuilderSheet(spec: s, mode: mode) { saved in
                     store.save(saved)
@@ -60,6 +87,7 @@ struct InsightsView: View {
             async let s = api.subscriptions()
             async let o = api.splits()
             (monthly, tags, subs, splits) = try await (m, t, s, o)
+            history = (try? await api.settlements()) ?? []
             withAnimation(.snappy) { loaded = true }
             error = nil
         } catch {
@@ -240,12 +268,10 @@ struct InsightsView: View {
                             }
                         }
                         .tint(Palette.muted)
-                        if let pid = p.person_id {
+                        if p.person_id != nil {
                             Button {
-                                Task {
-                                    try? await API(auth: auth).settle(personID: pid, currency: p.currency)
-                                    changes.bump()
-                                }
+                                Feedback.play(.tap)
+                                confirmPaid = p
                             } label: {
                                 Label("Mark \(p.name.split(separator: " ").first.map(String.init) ?? p.name) as paid", systemImage: "checkmark.circle")
                                     .font(.system(size: 12, weight: .bold, design: .rounded))
@@ -261,6 +287,83 @@ struct InsightsView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("All square").font(.system(size: 16, weight: .bold, design: .rounded)).foregroundStyle(Palette.ink)
                         Text("Nobody owes you a thing. Rare.").font(.caption).foregroundStyle(Palette.inkSoft)
+                    }
+                }
+            }
+        }
+    }
+
+    private func markPaid(_ p: Splits.Person) async {
+        guard let pid = p.person_id else { return }
+        do {
+            try await API(auth: auth).settle(personID: pid, currency: p.currency)
+            Feedback.play(.success)
+            await load()
+            // The newest settlement for this person is the one just made.
+            if let s = history.first(where: { $0.person_id == pid }) {
+                withAnimation(.snappy) { undo = (p.name, pid, s.settled_at) }
+                Task {
+                    try? await Task.sleep(for: .seconds(6))
+                    withAnimation(.snappy) { if undo?.at == s.settled_at { undo = nil } }
+                }
+            }
+            changes.bump()
+        } catch { Feedback.play(.warning) }
+    }
+
+    private func revive(personID: Int, at: String) async {
+        do {
+            try await API(auth: auth).unsettle(personID: personID, settledAt: at)
+            Feedback.play(.success)
+            withAnimation(.snappy) { undo = nil }
+            await load()
+            changes.bump()
+        } catch { Feedback.play(.warning) }
+    }
+
+    // MARK: Settled history
+
+    @ViewBuilder private var settledHistory: some View {
+        if !history.isEmpty {
+            Card(title: "Settled history") {
+                VStack(spacing: 0) {
+                    ForEach(history.prefix(15)) { h in
+                        DisclosureGroup {
+                            VStack(spacing: 6) {
+                                ForEach(h.items, id: \.split_id) { i in
+                                    HStack {
+                                        Text(i.merchant.map(prettyMerchant) ?? "—").lineLimit(1)
+                                        Spacer()
+                                        Text(Money.format(i.share_amount, h.currency)).monospacedDigit()
+                                    }
+                                    .font(.system(size: 13, design: .rounded)).foregroundStyle(Palette.inkSoft)
+                                }
+                                Button {
+                                    Task { await revive(personID: h.person_id, at: h.settled_at) }
+                                } label: {
+                                    Label("Mark as unpaid", systemImage: "arrow.uturn.backward")
+                                        .font(.system(size: 13, weight: .bold, design: .rounded))
+                                        .foregroundStyle(Palette.coral)
+                                }
+                                .frame(maxWidth: .infinity, alignment: .trailing)
+                                .padding(.top, 4)
+                            }
+                            .padding(.top, 6)
+                        } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: "checkmark.circle.fill").foregroundStyle(Palette.mint).font(.system(size: 20))
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(h.name).font(.system(size: 15, weight: .semibold, design: .rounded)).foregroundStyle(Palette.ink)
+                                    Text("Paid \(h.date.formatted(.dateTime.day().month(.abbreviated).hour().minute())) · \(h.items.count) item\(h.items.count == 1 ? "" : "s")")
+                                        .font(.caption).foregroundStyle(Palette.muted)
+                                }
+                                Spacer()
+                                AmountText(amount: h.total, currency: h.currency, size: 15, color: Palette.inkSoft)
+                            }
+                        }
+                        .tint(Palette.muted)
+                        .padding(.vertical, 8)
+                        if h.id != history.prefix(15).last?.id { Perforation() }
                     }
                 }
             }
