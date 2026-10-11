@@ -142,7 +142,7 @@ async function ensureRules(): Promise<Map<string, Rule>> {
   _rulesAt = Date.now();
   if (Date.now() - _syncedAt > 60_000) {
     _syncedAt = Date.now();
-    await syncRuleCategories();
+    void syncRuleCategories().catch(() => {}); // housekeeping; never block a request on it
   }
   return _rules;
 }
@@ -368,16 +368,16 @@ export async function spendingBreakdown(
 
 export async function overview(period: Period = "this_month", combine?: Combine) {
   const range = resolvePeriod(period);
-  let rows = await fetchAll({ from: range.from, to: range.to });
-
   // Same-length window immediately before, for a like-for-like comparison.
   const days =
     (new Date(`${range.to}T00:00:00Z`).getTime() - new Date(`${range.from}T00:00:00Z`).getTime()) / 86400000 + 1;
-  let prevRows =
-    period === "all_time"
-      ? []
-      : await fetchAll({ from: shiftDays(range.from, -days), to: shiftDays(range.from, -1) });
-  let excludedRows = await fetchAll({ from: range.from, to: range.to, category: EXCLUDED });
+  // One round of parallel queries instead of four sequential ones.
+  let [rows, prevRows, excludedRows, inRowsRaw] = await Promise.all([
+    fetchAll({ from: range.from, to: range.to }),
+    period === "all_time" ? Promise.resolve([] as Txn[]) : fetchAll({ from: shiftDays(range.from, -days), to: shiftDays(range.from, -1) }),
+    fetchAll({ from: range.from, to: range.to, category: EXCLUDED }),
+    fetchIncoming({ from: range.from, to: range.to }),
+  ]);
   let fx: { rate: number; date: string } | null = null;
   if (combine) {
     ({ rows, fx } = await convertRows(rows, combine));
@@ -421,7 +421,7 @@ export async function overview(period: Period = "this_month", combine?: Combine)
   }
 
   // Money in for the same window (own transfers/top-ups are shown but not counted as income).
-  let inRows = await fetchIncoming({ from: range.from, to: range.to });
+  let inRows = inRowsRaw;
   if (combine) inRows = (await convertRows(inRows as any, combine)).rows as any;
   const cash_flow: Record<string, any> = {};
   for (const ccy of new Set([...Object.keys(currencies), ...inRows.map((r) => r.currency)])) {
@@ -776,4 +776,180 @@ export async function unsettle(personId: number, settledAt: string) {
   if (error) throw new Error(error.message);
   resetSplits();
   return { reopened: data?.length ?? 0 };
+}
+
+// ── Natural-language search ────────────────────────────────
+// "august", "grab aug 2026", "food last month", ">50", "#coffee", "dbs yesterday"
+// → structured filters. Whatever isn't understood is matched against merchant names.
+
+const MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
+const CATEGORY_WORDS: Record<string, string> = {
+  food: "Food & Drink", drink: "Food & Drink", drinks: "Food & Drink", eating: "Food & Drink", dining: "Food & Drink", coffee: "Food & Drink",
+  transport: "Transport", taxi: "Transport", ride: "Transport", rides: "Transport",
+  shopping: "Shopping", subscriptions: "Subscriptions", subscription: "Subscriptions", subs: "Subscriptions",
+  health: "Health & Fitness", fitness: "Health & Fitness", gym: "Health & Fitness",
+  travel: "Travel", flights: "Travel", bills: "Utilities & Bills", utilities: "Utilities & Bills",
+  rent: "Rent & Housing", housing: "Rent & Housing", entertainment: "Entertainment", education: "Education",
+  transfers: "Transfers & Misc", transfer: "Transfers & Misc", misc: "Transfers & Misc", exclusions: "Exclusions", excluded: "Exclusions",
+};
+
+export type ParsedSearch = TxnFilters & { label: string[] };
+
+export function parseSearch(raw: string, cards: string[] = []): ParsedSearch {
+  const out: ParsedSearch = { label: [] };
+  const today = todaySGT();
+  let text = ` ${raw.toLowerCase().trim()} `;
+  const take = (re: RegExp) => { const m = text.match(re); if (m) text = text.replace(m[0], " "); return m; };
+  const range = (from: string, to: string, label: string) => { out.from = from; out.to = to > today ? today : to; out.label.push(label); };
+
+  // Relative ranges
+  const lastN = take(/\blast (\d{1,3}) days\b/);
+  if (lastN) { const n = Number(lastN[1]); range(shiftDays(today, -(n - 1)), today, `Last ${n} days`); }
+  const rel: [RegExp, () => void][] = [
+    [/\btoday\b/, () => range(today, today, "Today")],
+    [/\byesterday\b/, () => { const y = shiftDays(today, -1); range(y, y, "Yesterday"); }],
+    [/\bthis week\b/, () => { const r = resolvePeriod("this_week"); range(r.from, r.to, "This week"); }],
+    [/\blast week\b/, () => { const r = resolvePeriod("this_week"); range(shiftDays(r.from, -7), shiftDays(r.from, -1), "Last week"); }],
+    [/\bthis month\b/, () => { const r = resolvePeriod("this_month"); range(r.from, r.to, "This month"); }],
+    [/\blast month\b/, () => { const r = resolvePeriod("last_month"); range(r.from, r.to, "Last month"); }],
+    [/\bthis year\b/, () => { const r = resolvePeriod("this_year"); range(r.from, r.to, "This year"); }],
+  ];
+  for (const [re, fn] of rel) { if (out.from) break; if (take(re)) fn(); }
+
+  // Month name (+ optional year): "aug", "august 2025", "sept"
+  if (!out.from) {
+    const m = take(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?(?:\s+'?(\d{2,4}))?\b/);
+    if (m && (m[0].trim().length >= 3)) {
+      const mi = MONTHS.findIndex((x) => x.startsWith(m[1].slice(0, 3)));
+      let year = m[2] ? Number(m[2].length === 2 ? `20${m[2]}` : m[2]) : Number(today.slice(0, 4));
+      const ym = `${year}-${String(mi + 1).padStart(2, "0")}`;
+      if (!m[2] && ym > today.slice(0, 7)) year -= 1; // "december" in October means last December
+      const b = monthBounds(`${year}-${String(mi + 1).padStart(2, "0")}`);
+      range(b.from, b.to, `${MONTHS[mi][0].toUpperCase()}${MONTHS[mi].slice(1)} ${year}`);
+    }
+  }
+  // ISO date / range: 2026-08-01, 2026-08-01..2026-08-15
+  if (!out.from) {
+    const m = take(/\b(\d{4}-\d{2}-\d{2})(?:\s*(?:\.\.|to|-)\s*(\d{4}-\d{2}-\d{2}))?\b/);
+    if (m) range(m[1], m[2] ?? m[1], m[2] ? `${m[1]} → ${m[2]}` : m[1]);
+  }
+
+  // Amounts: >50, <20, 10-30, =12.5
+  let m = take(/(?:^|\s)([<>]=?)\s*(?:s\$|\$|₹|rs\.?)?\s*(\d+(?:\.\d+)?)/);
+  if (m) { const v = Number(m[2]); m[1].startsWith(">") ? (out.min_amount = v) : (out.max_amount = v); out.label.push(`${m[1]}${v}`); }
+  m = take(/(?:^|\s)(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)(?=\s)/);
+  if (m) { out.min_amount = Number(m[1]); out.max_amount = Number(m[2]); out.label.push(`${m[1]}–${m[2]}`); }
+  m = take(/(?:^|\s)(?:s\$|\$|₹|=)\s*(\d+(?:\.\d+)?)(?=\s)/);
+  if (m) { const v = Number(m[1]); out.min_amount = v - 0.005; out.max_amount = v + 0.005; out.label.push(`= ${v}`); }
+  // A bare number (not a year) is an exact amount: "12.50", "8".
+  if (out.min_amount == null && out.max_amount == null && /^\s*\d+(?:\.\d+)?\s*$/.test(text) && !/^\s*(19|20)\d\d\s*$/.test(text)) {
+    const v = Number(text.trim()); out.min_amount = v - 0.005; out.max_amount = v + 0.005; out.label.push(`= ${v}`); text = " ";
+  }
+
+  // Currency, card, tag
+  m = take(/\b(sgd|inr)\b/); if (m) { out.currency = m[1].toUpperCase(); out.label.push(out.currency); }
+  m = take(/#([\w-]+(?:\s[\w-]+)?)/); if (m) { out.tag = m[1]; out.label.push(`#${m[1]}`); }
+  for (const c of cards) { const r = new RegExp(`\\b${c}\\b`); if (r.test(text)) { text = text.replace(r, " "); out.card = c; out.label.push(c.toUpperCase()); break; } }
+
+  // Category: exact category name or a common word for it — only if it isn't also a merchant word we'd lose.
+  for (const cat of CATEGORIES_ALL) {
+    const r = new RegExp(`\\b${cat.toLowerCase().replace(/[&]/g, "\\&")}\\b`);
+    if (r.test(text)) { text = text.replace(r, " "); out.category = cat; out.label.push(cat); break; }
+  }
+  if (!out.category) {
+    const words = text.trim().split(/\s+/).filter(Boolean);
+    // Only treat a word as a category when it's the whole remaining query, so "coffee bean" stays a merchant search.
+    if (words.length === 1 && CATEGORY_WORDS[words[0]]) { out.category = CATEGORY_WORDS[words[0]]; out.label.push(out.category); text = " "; }
+  }
+
+  const rest = text.replace(/\s+/g, " ").trim();
+  if (rest) { out.merchant = rest; out.label.unshift(`“${rest}”`); }
+  return out;
+}
+
+const CATEGORIES_ALL = [
+  "Food & Drink", "Transport", "Shopping", "Subscriptions", "Health & Fitness", "Travel",
+  "Utilities & Bills", "Rent & Housing", "Entertainment", "Education", "Transfers & Misc", "Exclusions",
+];
+
+let _cardSlugs: string[] = [];
+let _cardsAt = 0;
+async function cardSlugs() {
+  if (Date.now() - _cardsAt > 300_000) {
+    const { data } = await db().from("cards").select("card");
+    _cardSlugs = (data ?? []).map((c: any) => c.card);
+    _cardsAt = Date.now();
+  }
+  return _cardSlugs;
+}
+
+/** Transactions for a free-text query plus explicit filters (explicit ones win). */
+export async function searchTransactions(q: string, f: TxnFilters & { limit?: number; offset?: number; sort?: "date_desc" | "date_asc" | "amount_desc" }) {
+  const parsed = q.trim() ? parseSearch(q, await cardSlugs()) : { label: [] };
+  const { label, ...pf } = parsed as ParsedSearch;
+  const merged = { ...pf, ...Object.fromEntries(Object.entries(f).filter(([, v]) => v != null && v !== "")) };
+  // Sum of the matching set (your share; Exclusions left out) so "august" also answers "how much".
+  // Only on the first page, and in parallel with the list.
+  const [res, all] = await Promise.all([listTransactions(merged), f.offset ? Promise.resolve(null) : fetchAll(merged)]);
+  const totals: Record<string, number> = {};
+  for (const t of all ?? []) totals[t.currency] = round2((totals[t.currency] ?? 0) + t.amount);
+  return { ...res, interpreted: label.length ? label.join(" · ") : null, totals };
+}
+
+// ── Multi-series insights ──────────────────────────────────
+// Compare several things over time: e.g. category "Food & Drink" vs merchant "Anytime Fitness".
+// One read of the range, then each series filters in memory.
+
+export type SeriesDef = { kind: "all" | "category" | "merchant" | "tag"; value: string };
+
+export async function compareSeries(opts: {
+  series: SeriesDef[]; from: string; to: string; group_by: "day" | "week" | "month"; combine?: Combine;
+}) {
+  const wantsExcluded = opts.series.some((x) => x.kind === "category" && x.value === EXCLUDED);
+  let rows = await fetchAll({ from: opts.from, to: opts.to }, { includeExcluded: wantsExcluded });
+  if (opts.combine) rows = (await convertRows(rows, opts.combine)).rows;
+
+  // Every bucket in the range, so empty days/weeks still show as zero.
+  const keys: string[] = [];
+  const seen = new Set<string>();
+  for (let d = opts.from; d <= opts.to; d = shiftDays(d, 1)) {
+    const k = bucket(d, opts.group_by);
+    if (!seen.has(k)) { seen.add(k); keys.push(k); }
+  }
+
+  const matches = (t: Txn, def: SeriesDef) => {
+    if (def.kind === "all") return t.category !== EXCLUDED;
+    if (def.kind === "category") return t.category === def.value;
+    if (def.kind === "tag") return (t.user_tag ?? "").toLowerCase() === def.value.toLowerCase();
+    const v = def.value.toLowerCase();
+    return (t.merchant ?? "").toLowerCase() === v || (t.raw_merchant ?? "").toLowerCase() === v;
+  };
+
+  const out: Record<string, { keys: string[]; series: { label: string; kind: string; total: number; count: number; points: number[] }[] }> = {};
+  const currencies = new Set(rows.map((r) => r.currency));
+  for (const ccy of currencies) {
+    const inCcy = rows.filter((r) => r.currency === ccy);
+    out[ccy] = {
+      keys,
+      series: opts.series.map((def) => {
+        const pts = new Map<string, number>();
+        let total = 0, count = 0;
+        for (const t of inCcy) {
+          if (!matches(t, def)) continue;
+          const k = bucket(t.txn_date, opts.group_by);
+          pts.set(k, (pts.get(k) ?? 0) + t.amount);
+          total += t.amount; count += 1;
+        }
+        const label = def.kind === "all" ? "All spending" : def.kind === "tag" ? `#${def.value}` : def.value;
+        return { label, kind: def.kind, total: round2(total), count, points: keys.map((k) => round2(pts.get(k) ?? 0)) };
+      }),
+    };
+  }
+  return out;
+}
+
+function bucket(date: string, g: "day" | "week" | "month") {
+  if (g === "month") return date.slice(0, 7);
+  if (g === "week") { const dow = (new Date(`${date}T00:00:00Z`).getUTCDay() + 6) % 7; return shiftDays(date, -dow); }
+  return date;
 }

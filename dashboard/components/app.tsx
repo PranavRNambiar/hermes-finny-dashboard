@@ -1,11 +1,11 @@
 "use client";
 
-import { QueryClient, QueryClientProvider, useQueryClient } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, useIsFetching, useIsMutating, useQueryClient } from "@tanstack/react-query";
 import { BarChart3, CreditCard, LayoutGrid, List, LogOut, Search, Users } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { createContext, ReactNode, useCallback, useContext, useEffect, useRef, useState } from "react";
-import { Mode, MODES } from "@/lib/ui/finny";
+import { api, Mode, modeCombine, MODES } from "@/lib/ui/finny";
 import { CommandMenu } from "./command-menu";
 import { ShortcutsHelp } from "./shortcuts-help";
 import { TxnDrawer } from "./txn-drawer";
@@ -85,6 +85,14 @@ function Shell({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  // Warm the main screens so tab switches render from cache instantly.
+  useEffect(() => {
+    qc.prefetchQuery({ queryKey: ["overview", "this_month", mode], queryFn: () => api("overview", { period: "this_month", combine: modeCombine(mode) }) });
+    qc.prefetchQuery({ queryKey: ["splits"], queryFn: () => api("splits") });
+    qc.prefetchQuery({ queryKey: ["meta"], queryFn: () => api("meta") });
+    qc.prefetchQuery({ queryKey: ["merchants"], queryFn: () => api("merchants") });
+  }, [qc, mode]);
+
   const ctx: Ctx = {
     mode, setMode, cycleMode,
     txnId, openTxn: setTxnId, closeTxn: () => setTxnId(null),
@@ -122,6 +130,7 @@ function Shell({ children }: { children: ReactNode }) {
   return (
     <AppCtx.Provider value={ctx}>
       <div className="min-h-screen">
+        <ProgressBar />
         {/* Desktop sidebar */}
         <aside className="fixed inset-y-0 left-0 hidden w-[232px] flex-col px-4 py-6 md:flex">
           <Link href="/" className="mb-6 px-3 text-[22px] font-extrabold tracking-tight text-mint">finny</Link>
@@ -179,5 +188,15 @@ function Shell({ children }: { children: ReactNode }) {
       <ShortcutsHelp open={help} onClose={() => setHelp(false)} />
       <TxnDrawer />
     </AppCtx.Provider>
+  );
+}
+
+/** Thin mint bar at the top while anything is loading or saving — instant feedback on every click. */
+function ProgressBar() {
+  const busy = useIsFetching() + useIsMutating() > 0;
+  return (
+    <div className={`fixed inset-x-0 top-0 z-[60] h-[2px] overflow-hidden transition-opacity duration-200 ${busy ? "opacity-100" : "opacity-0"}`}>
+      <div className="h-full w-1/3 animate-[finny-load_1s_ease-in-out_infinite] rounded-full bg-[var(--mint)]" />
+    </div>
   );
 }

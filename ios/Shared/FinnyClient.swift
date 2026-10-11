@@ -17,11 +17,16 @@ struct FinnyClient {
         try await get("summary", combine.map { ["combine": $0] } ?? [:])
     }
 
-    static func breakdown(_ spec: InsightSpec, combine: String?) async throws -> [String: Breakdown] {
-        try await get("breakdown", spec.query(combine: combine))
+    static func insight(_ spec: InsightSpec, combine: String?) async throws -> InsightData {
+        let (path, q) = spec.request(combine: combine)
+        return path == "compare" ? InsightData(compare: try await get(path, q)) : InsightData(breakdown: try await get(path, q))
     }
 
     private static func get<T: Decodable>(_ path: String, _ params: [String: String]) async throws -> T {
+        try await get(path, params.map { URLQueryItem(name: $0.key, value: $0.value) })
+    }
+
+    private static func get<T: Decodable>(_ path: String, _ items: [URLQueryItem]) async throws -> T {
         guard let base = SharedStore.serverURL, let refresh = TokenStore.read() else { throw Failure.signedOut }
         var tokenReq = URLRequest(url: base.appending(path: "oauth/token"))
         tokenReq.httpMethod = "POST"
@@ -32,7 +37,7 @@ struct FinnyClient {
         let access = try JSONDecoder().decode(Token.self, from: td).access_token
 
         var comps = URLComponents(url: base.appending(path: "api/v1/" + path), resolvingAgainstBaseURL: false)!
-        if !params.isEmpty { comps.queryItems = params.map { URLQueryItem(name: $0.key, value: $0.value) } }
+        if !items.isEmpty { comps.queryItems = items }
         var req = URLRequest(url: comps.url!)
         req.setValue("Bearer \(access)", forHTTPHeaderField: "Authorization")
         let (data, resp) = try await URLSession.shared.data(for: req)

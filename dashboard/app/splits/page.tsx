@@ -25,8 +25,10 @@ export default function SplitsPage() {
 
   async function markPaid(p: Person) {
     setConfirm(null);
+    // Optimistic: drop the person from the list immediately.
+    qc.setQueryData(["splits"], (d: any) => d && { ...d, owed_to_me: d.owed_to_me.filter((x: Person) => !(x.person_id === p.person_id && x.currency === p.currency)) });
     await send("POST", "splits/settle", { person_id: p.person_id, currency: p.currency });
-    await qc.invalidateQueries();
+    void qc.invalidateQueries();
     const h = await api<{ settlements: Settlement[] }>("splits/history");
     const s = h.settlements.find((x) => x.person_id === p.person_id);
     if (s) { setUndo({ name: p.name, person_id: s.person_id, at: s.settled_at }); setTimeout(() => setUndo((u) => (u?.at === s.settled_at ? null : u)), 8000); }
@@ -34,7 +36,7 @@ export default function SplitsPage() {
   async function revive(person_id: number, at: string) {
     await send("POST", "splits/unsettle", { person_id, settled_at: at });
     setUndo(null);
-    await qc.invalidateQueries();
+    void qc.invalidateQueries();
   }
 
   const people = owed.data?.owed_to_me ?? [];

@@ -52,8 +52,10 @@ struct HomeView: View {
     }
 
     private func load() async {
+        let api = API(auth: auth)
+        if let cached = api.cachedOverview(period, combine: mode.combine) { data = cached }
         do {
-            let o = try await API(auth: auth).overview(period, combine: mode.combine)
+            let o = try await api.overview(period, combine: mode.combine)
             withAnimation(.snappy) { data = o }
             error = nil
             if !mode.isCombined, o.currencies[currency] == nil, o.currencies["INR"] != nil || o.currencies["SGD"] != nil {

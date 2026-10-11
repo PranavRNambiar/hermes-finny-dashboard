@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ArrowRight, BarChart3, Coins, Download, Hash, Plus, RefreshCw, Search, Store, Tag } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, CATEGORIES, displayMerchant, MODES, prettyMerchant, Txn } from "@/lib/ui/finny";
+import { api, CATEGORIES, displayMerchant, MODES, money, prettyMerchant, Txn } from "@/lib/ui/finny";
 import { NAV, useApp } from "./app";
 import { Amount, CategoryIcon, Kbd } from "./ui";
 
@@ -26,9 +26,10 @@ export function CommandMenu({ open, initial, onClose }: { open: boolean; initial
   const txns = useQuery({
     queryKey: ["cmd-txns", debounced],
     enabled: open && debounced.length >= 2,
-    queryFn: () => api<{ transactions: Txn[] }>("transactions", amount != null
+    queryFn: () => api<{ transactions: Txn[]; total: number; interpreted: string | null; totals: Record<string, number> }>("transactions", amount != null
       ? { min_amount: amount - 0.005, max_amount: amount + 0.005, limit: 8 }
       : { q: debounced, limit: 8 }),
+    placeholderData: (prev) => prev,
   });
   const merchants = useQuery({
     queryKey: ["merchants"], enabled: open, staleTime: 5 * 60_000,
@@ -55,9 +56,15 @@ export function CommandMenu({ open, initial, onClose }: { open: boolean; initial
     out.push(...actions.filter((a) => match(a.label) || match(a.group)));
 
     if (needle) {
-      for (const t of txns.data?.transactions ?? []) {
+      const d = txns.data;
+      if (d?.interpreted && d.total > 8) {
+        out.push({ id: "see-all", group: `Transactions · ${d.interpreted}`, label: `See all ${d.total}`,
+          hint: Object.entries(d.totals ?? {}).map(([c, v]) => money(v, c)).join(" · ") + " total",
+          icon: <Search size={16} />, run: go(`/activity?q=${encodeURIComponent(debounced)}`) });
+      }
+      for (const t of d?.transactions ?? []) {
         out.push({
-          id: `txn-${t.id}`, group: amount != null ? `Transactions of ${debounced}` : "Transactions",
+          id: `txn-${t.id}`, group: amount != null ? `Transactions of ${debounced}` : d?.interpreted ? `Transactions · ${d.interpreted}` : "Transactions",
           label: displayMerchant(t), hint: `${t.txn_date} · ${t.category}`,
           icon: <CategoryIcon category={t.category} size={26} />,
           right: <Amount value={t.amount} currency={t.currency} size={14} />,
@@ -98,7 +105,7 @@ export function CommandMenu({ open, initial, onClose }: { open: boolean; initial
         <div className="flex items-center gap-3 px-5 py-4">
           <Search size={18} className="text-muted" />
           <input ref={input} value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={onKey}
-            placeholder="Search transactions, merchants, amounts… or type a command"
+            placeholder="Search “august”, “grab last month”, “food >20”, an amount… or a command"
             className="flex-1 bg-transparent text-[16px] font-medium text-ink outline-none placeholder:text-muted" />
           <Kbd>esc</Kbd>
         </div>

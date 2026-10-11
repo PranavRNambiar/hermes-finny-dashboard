@@ -34,6 +34,7 @@ final class Auth: NSObject {
         SharedStore.serverURL = serverURL
         if let token = TokenStore.read() { TokenStore.save(token) }  // move older tokens into the shared group
         isSignedIn = serverURL != nil && TokenStore.read() != nil
+        if isSignedIn, let a = TokenStore.readAccess() { (accessToken, accessExpiry) = (a.token, a.expiry) }
     }
 
     // MARK: Sign in
@@ -87,6 +88,7 @@ final class Auth: NSObject {
 
     func signOut() {
         TokenStore.delete()
+        ResponseCache.clear()
         accessToken = nil
         accessExpiry = .distantPast
         isSignedIn = false
@@ -137,6 +139,7 @@ final class Auth: NSObject {
         let tok = try JSONDecoder().decode(TokenResponse.self, from: data)
         accessToken = tok.access_token
         accessExpiry = .now.addingTimeInterval(tok.expires_in)
+        TokenStore.saveAccess(tok.access_token, expiry: accessExpiry)
         if let rt = tok.refresh_token { TokenStore.save(rt) }
     }
 

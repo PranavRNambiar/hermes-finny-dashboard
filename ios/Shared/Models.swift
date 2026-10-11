@@ -99,6 +99,19 @@ struct Overview: Decodable {
 struct TxnPage: Decodable {
     let transactions: [Txn]
     let total: Int
+    /// How the server read the search, e.g. "August 2026 · Food & Drink".
+    var interpreted: String?
+    var totals: [String: Double]?
+}
+
+/// /api/v1/compare: per currency, one row of points per series over shared time buckets.
+struct Compare: Decodable {
+    struct Series: Decodable, Hashable { let label: String; let kind: String; let total: Double; let count: Int; let points: [Double] }
+    struct Block: Decodable { let keys: [String]; let series: [Series] }
+    let from: String
+    let to: String
+    let group_by: String
+    let data: [String: Block]
 }
 
 struct Breakdown: Decodable {

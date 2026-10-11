@@ -40,7 +40,7 @@ struct InsightCard: View {
     var onEdit: () -> Void = {}
     var onUnpin: () -> Void = {}
     var onDelete: () -> Void = {}
-    @State private var data: [String: Breakdown] = [:]
+    @State private var data: InsightData?
 
     private var currency: String { mode.currency }
 
@@ -49,7 +49,7 @@ struct InsightCard: View {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 4) {
                     Eyebrow(spec.title)
-                    AmountText(amount: data[currency]?.total ?? 0, currency: currency, size: 26, weight: .bold)
+                    InsightTotals(spec: spec, data: data, currency: currency)
                 }
                 Spacer()
                 Menu {
@@ -61,17 +61,28 @@ struct InsightCard: View {
                         .frame(width: 32, height: 32).contentShape(.rect)
                 }
             }
-            InsightChartView(spec: spec, data: data[currency], currency: currency)
-                .frame(height: spec.chart == .pie ? 150 : 170)
+            InsightChartView(spec: spec, data: data, currency: currency)
+                .frame(height: chartHeight(spec))
         }
         .card()
         .task(id: "\(spec.hashValue)-\(mode.rawValue)-\(changes.version)") {
-            data = (try? await API(auth: auth).breakdown(spec, combine: mode.combine)) ?? [:]
+            let api = API(auth: auth)
+            if let cached = api.cachedInsight(spec, combine: mode.combine) { data = cached }
+            if let fresh = try? await api.insight(spec, combine: mode.combine) { data = fresh }
         }
     }
 }
 
-/// Build (or edit) an insight: what, when, which chart. Live preview as you go.
+func chartHeight(_ spec: InsightSpec) -> CGFloat {
+    switch spec.chart {
+    case .pie: 150
+    case .totals: CGFloat(max(1, spec.series.count)) * 40 + 10
+    default: spec.series.count > 1 ? 200 : 170
+    }
+}
+
+/// Build (or edit) an insight: compare any mix of categories, merchants and tags, over a range,
+/// as bars, stacked bars, lines, totals or a pie. Live preview as you go.
 struct InsightBuilderSheet: View {
     @Environment(Auth.self) private var auth
     @Environment(\.dismiss) private var dismiss
@@ -82,7 +93,14 @@ struct InsightBuilderSheet: View {
     @State private var merchants: [MerchantInfo] = []
     @State private var tags: [String] = []
     @State private var search = ""
-    @State private var preview: [String: Breakdown] = [:]
+    @State private var adding: InsightSpec.Kind = .category
+    @State private var preview: InsightData?
+
+    private static let presets: [(String, [InsightSpec.Series])] = [
+        ("Food vs Fitness", [.init(kind: .category, value: "Food & Drink"), .init(kind: .category, value: "Health & Fitness")]),
+        ("Food vs Transport vs Shopping", [.init(kind: .category, value: "Food & Drink"), .init(kind: .category, value: "Transport"), .init(kind: .category, value: "Shopping")]),
+        ("Everything vs Food", [.init(kind: .all), .init(kind: .category, value: "Food & Drink")]),
+    ]
 
     var body: some View {
         NavigationStack {
@@ -91,16 +109,52 @@ struct InsightBuilderSheet: View {
                     // Preview
                     VStack(alignment: .leading, spacing: 10) {
                         Eyebrow(spec.title)
-                        AmountText(amount: preview[mode.currency]?.total ?? 0, currency: mode.currency, size: 28, weight: .bold)
-                        InsightChartView(spec: spec, data: preview[mode.currency], currency: mode.currency)
-                            .frame(height: 170)
+                        InsightTotals(spec: spec, data: preview, currency: mode.currency, size: 28)
+                        InsightChartView(spec: spec, data: preview, currency: mode.currency)
+                            .frame(height: chartHeight(spec))
                     }
                     .card()
 
-                    section("Chart") {
-                        PillPicker(options: InsightSpec.Chart.allCases, selection: $spec.chart) {
-                            switch $0 { case .bar: "Bars"; case .line: "Line"; case .pie: "Pie" }
+                    section("Comparing") {
+                        WrapLayout(spacing: 8) {
+                            ForEach(Array(spec.series.enumerated()), id: \.element) { i, s in
+                                Button { toggle(s) } label: {
+                                    HStack(spacing: 6) {
+                                        Circle().fill(InsightChartView.color(i)).frame(width: 9, height: 9)
+                                        Text(s.label).lineLimit(1)
+                                        Image(systemName: "xmark").font(.system(size: 9, weight: .heavy)).foregroundStyle(Palette.muted)
+                                    }
+                                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                                    .foregroundStyle(Palette.ink)
+                                    .padding(.horizontal, 12).frame(height: 32)
+                                    .background(Palette.surface, in: .capsule)
+                                }
+                                .buttonStyle(.plain)
+                            }
                         }
+                        if spec.series.isEmpty {
+                            Text("Add at least one thing below.").font(.caption).foregroundStyle(Palette.muted)
+                        }
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
+                                ForEach(Self.presets, id: \.0) { name, series in
+                                    Button { Feedback.play(.select); spec.series = series } label: {
+                                        Text(name).font(.system(size: 12, weight: .bold, design: .rounded))
+                                            .foregroundStyle(Palette.mint)
+                                            .padding(.horizontal, 12).frame(height: 30)
+                                            .background(Palette.mint.opacity(0.14), in: .capsule)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                        }
+                    }
+
+                    section("Add to chart") {
+                        PillPicker(options: [InsightSpec.Kind.category, .merchant, .tag, .all], selection: $adding) {
+                            switch $0 { case .all: "All"; case .merchant: "Merchant"; case .category: "Category"; case .tag: "Tag" }
+                        }
+                        valuePicker
                     }
 
                     section("Range") {
@@ -127,11 +181,12 @@ struct InsightBuilderSheet: View {
                         }
                     }
 
-                    section("Show") {
-                        PillPicker(options: InsightSpec.Scope.allCases, selection: $spec.scope) {
-                            switch $0 { case .all: "All"; case .merchant: "Merchant"; case .category: "Category"; case .tag: "Tag" }
+                    section("Chart") {
+                        WrapLayout(spacing: 8) {
+                            ForEach(InsightSpec.Chart.allCases, id: \.self) { c in chip(c.label, on: spec.chart == c) { spec.chart = c } }
                         }
-                        valuePicker
+                        Text(spec.chart.hint + (spec.range == .today && spec.chart != .totals && spec.chart != .pie ? " — for Today, Totals or Pie read best." : ""))
+                            .font(.caption).foregroundStyle(Palette.muted)
                     }
                 }
                 .padding(20)
@@ -144,39 +199,51 @@ struct InsightBuilderSheet: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") { onSave(spec); dismiss() }
                         .fontWeight(.bold)
-                        .disabled(spec.scope != .all && spec.value.isEmpty)
+                        .disabled(!spec.isReady)
                 }
             }
             .task {
-                async let m = try? API(auth: auth).merchants()
-                async let t = try? API(auth: auth).meta()
-                merchants = await m ?? []
-                tags = (await t)?.tags.map(\.name) ?? []
+                let api = API(auth: auth)
+                merchants = (try? await api.merchants()) ?? []
+                var meta = api.cachedMeta()
+                if meta == nil { meta = try? await api.meta() }
+                tags = meta?.tags.map(\.name) ?? []
             }
-            .onChange(of: spec.scope) { _, _ in spec.value = "" }
             .task(id: spec) {
-                if spec.scope != .all && spec.value.isEmpty { preview = [:]; return }
-                try? await Task.sleep(for: .milliseconds(250))   // debounce while tapping around
-                preview = (try? await API(auth: auth).breakdown(spec, combine: mode.combine)) ?? preview
+                guard spec.isReady else { preview = nil; return }
+                let api = API(auth: auth)
+                if let cached = api.cachedInsight(spec, combine: mode.combine) { preview = cached; return }
+                try? await Task.sleep(for: .milliseconds(200))   // debounce while tapping around
+                if let fresh = try? await api.insight(spec, combine: mode.combine) { preview = fresh }
             }
         }
         .presentationDetents([.large])
     }
 
+    private func has(_ s: InsightSpec.Series) -> Bool { spec.series.contains(s) }
+
+    private func toggle(_ s: InsightSpec.Series) {
+        Feedback.play(.select)
+        if has(s) { spec.series.removeAll { $0 == s }; return }
+        // "All spending" on its own replaces nothing; anything else drops a lone "All" placeholder.
+        if s.kind != .all, spec.series == [InsightSpec.Series(kind: .all)] { spec.series = [] }
+        if spec.series.count < 8 { spec.series.append(s) }
+    }
+
     @ViewBuilder private var valuePicker: some View {
-        switch spec.scope {
+        switch adding {
         case .all:
-            EmptyView()
+            WrapLayout(spacing: 8) { chip("All spending", on: has(.init(kind: .all))) { toggle(.init(kind: .all)) } }
         case .category:
             WrapLayout(spacing: 8) {
-                ForEach(allCategories, id: \.self) { c in chip(c, on: spec.value == c) { spec.value = c } }
+                ForEach(allCategories, id: \.self) { c in chip(c, on: has(.init(kind: .category, value: c))) { toggle(.init(kind: .category, value: c)) } }
             }
         case .tag:
             if tags.isEmpty {
                 Text("No tags yet.").font(.caption).foregroundStyle(Palette.muted)
             } else {
                 WrapLayout(spacing: 8) {
-                    ForEach(tags.prefix(30), id: \.self) { t in chip("#\(t)", on: spec.value == t) { spec.value = t } }
+                    ForEach(tags.prefix(30), id: \.self) { t in chip("#\(t)", on: has(.init(kind: .tag, value: t))) { toggle(.init(kind: .tag, value: t)) } }
                 }
             }
         case .merchant:
@@ -192,7 +259,8 @@ struct InsightBuilderSheet: View {
                 VStack(spacing: 0) {
                     let list = merchants.filter { search.isEmpty || $0.name.localizedCaseInsensitiveContains(search) }.prefix(25)
                     ForEach(Array(list)) { m in
-                        Button { spec.value = m.name } label: {
+                        let s = InsightSpec.Series(kind: .merchant, value: m.name)
+                        Button { toggle(s) } label: {
                             HStack {
                                 VStack(alignment: .leading, spacing: 1) {
                                     HStack(spacing: 4) {
@@ -203,7 +271,7 @@ struct InsightBuilderSheet: View {
                                     Text("\(m.count) visits · last \(m.last)").font(.caption).foregroundStyle(Palette.muted)
                                 }
                                 Spacer()
-                                if spec.value == m.name { Image(systemName: "checkmark.circle.fill").foregroundStyle(Palette.mint).font(.system(size: 20)) }
+                                if has(s) { Image(systemName: "checkmark.circle.fill").foregroundStyle(Palette.mint).font(.system(size: 20)) }
                             }
                             .padding(.vertical, 8).contentShape(.rect)
                         }

@@ -176,14 +176,17 @@ struct InsightConfig: WidgetConfigurationIntent {
 struct InsightEntry: TimelineEntry {
     let date: Date
     let spec: InsightSpec?
-    let data: Breakdown?
+    let data: InsightData?
     let error: String?
 }
 
 struct InsightProvider: AppIntentTimelineProvider {
     func placeholder(in context: Context) -> InsightEntry {
-        let groups = (1...7).map { Breakdown.Group(key: "2026-10-0\($0)", total: Double([12, 30, 8, 44, 20, 16, 36][$0 - 1]), count: 1, share_pct: 0) }
-        return InsightEntry(date: .now, spec: InsightSpec(), data: Breakdown(total: 166, count: 7, groups: groups), error: nil)
+        let pts: [Double] = [12, 30, 8, 44, 20, 16, 36]
+        let block = Compare.Block(keys: (1...7).map { "2026-10-0\($0)" },
+                                  series: [Compare.Series(label: "All spending", kind: "all", total: 166, count: 7, points: pts)])
+        let data = InsightData(compare: Compare(from: "2026-10-01", to: "2026-10-07", group_by: "day", data: [WidgetCurrency.currency: block]))
+        return InsightEntry(date: .now, spec: InsightSpec(), data: data, error: nil)
     }
     func snapshot(for configuration: InsightConfig, in context: Context) async -> InsightEntry {
         context.isPreview ? placeholder(in: context) : await load(configuration)
@@ -198,8 +201,8 @@ struct InsightProvider: AppIntentTimelineProvider {
             return InsightEntry(date: .now, spec: nil, data: nil, error: "Build an insight in Finny → Insights")
         }
         do {
-            let d = try await FinnyClient.breakdown(spec, combine: WidgetCurrency.combine)
-            return InsightEntry(date: .now, spec: spec, data: d[WidgetCurrency.currency], error: nil)
+            let d = try await FinnyClient.insight(spec, combine: WidgetCurrency.combine)
+            return InsightEntry(date: .now, spec: spec, data: d, error: nil)
         } catch {
             return InsightEntry(date: .now, spec: spec, data: nil, error: "Open Finny to refresh")
         }
@@ -226,7 +229,7 @@ struct InsightWidgetView: View {
             if let spec = entry.spec {
                 Text(spec.title.uppercased()).font(.system(size: 9, weight: .bold, design: .rounded)).tracking(1)
                     .foregroundStyle(Palette.muted).lineLimit(1)
-                AmountText(amount: entry.data?.total ?? 0, currency: WidgetCurrency.currency, size: family == .systemSmall ? 20 : 24, weight: .bold)
+                totals
                 if let error = entry.error {
                     Spacer()
                     Text(error).font(.caption2).foregroundStyle(Palette.muted)
@@ -240,5 +243,23 @@ struct InsightWidgetView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    @ViewBuilder private var totals: some View {
+        let t = entry.data?.totals(WidgetCurrency.currency) ?? [0]
+        if t.count <= 1 {
+            AmountText(amount: t.first ?? 0, currency: WidgetCurrency.currency, size: family == .systemSmall ? 20 : 24, weight: .bold)
+        } else {
+            HStack(spacing: 8) {
+                ForEach(t.indices.prefix(family == .systemSmall ? 2 : 4), id: \.self) { i in
+                    HStack(spacing: 3) {
+                        Circle().fill(InsightChartView.color(i)).frame(width: 6, height: 6)
+                        Text(Money.format(t[i], WidgetCurrency.currency, compact: true))
+                            .font(.system(size: 13, weight: .bold, design: .rounded).monospacedDigit()).foregroundStyle(Palette.ink)
+                    }
+                }
+            }
+            .lineLimit(1).minimumScaleFactor(0.7)
+        }
     }
 }

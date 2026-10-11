@@ -41,8 +41,8 @@ export function TxnDrawer() {
   async function save(message: string, op: () => Promise<unknown>): Promise<string | null> {
     try {
       await op();
-      await qc.invalidateQueries();
       setPanel(null);
+      void qc.invalidateQueries(); // refresh in the background; don't hold the UI
       setToast(message);
       setTimeout(() => setToast(null), 2600);
       return null;
@@ -140,11 +140,12 @@ function Action({ icon, label, k, on, onClick }: { icon: React.ReactNode; label:
 type Save = (message: string, op: () => Promise<unknown>) => Promise<string | null>;
 
 function PanelFrame({ title, children, onSubmit, submitLabel, error, applyAll, setApplyAll, merchant }: {
-  title: string; children: React.ReactNode; onSubmit: () => void; submitLabel: string; error: string | null;
+  title: string; children: React.ReactNode; onSubmit: () => void | Promise<void>; submitLabel: string; error: string | null;
   applyAll?: boolean; setApplyAll?: (v: boolean) => void; merchant?: string;
 }) {
+  const [busy, setBusy] = useState(false);
   return (
-    <form className="card mt-3 space-y-4" onSubmit={(e) => { e.preventDefault(); onSubmit(); }}>
+    <form className="card mt-3 space-y-4" onSubmit={async (e) => { e.preventDefault(); if (busy) return; setBusy(true); try { await onSubmit(); } finally { setBusy(false); } }}>
       <Eyebrow>{title}</Eyebrow>
       {children}
       {setApplyAll && (
@@ -157,8 +158,8 @@ function PanelFrame({ title, children, onSubmit, submitLabel, error, applyAll, s
         </label>
       )}
       {error && <div className="text-[13px] text-coral">{error}</div>}
-      <button className="h-12 w-full rounded-2xl bg-ink text-[15px] font-bold text-surface">
-        {submitLabel} <span className="ml-1 text-[11px] opacity-50">↵</span>
+      <button disabled={busy} className="h-12 w-full rounded-2xl bg-ink text-[15px] font-bold text-surface disabled:opacity-70">
+        {busy ? "Saving…" : <>{submitLabel} <span className="ml-1 text-[11px] opacity-50">↵</span></>}
       </button>
     </form>
   );

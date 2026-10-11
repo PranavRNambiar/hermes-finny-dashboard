@@ -81,6 +81,15 @@ struct InsightsView: View {
         let api = API(auth: auth)
         let from = Calendar.current.date(byAdding: .month, value: -11, to: .now)!
         let fromISO = String(DateFormatter.isoDay.string(from: from).prefix(7)) + "-01"
+        // Paint the last copy first so the tab opens instantly.
+        if let m = api.cachedBreakdown(groupBy: "month", from: fromISO, combine: mode.combine),
+           let t = api.cachedBreakdown(groupBy: "tag", period: "this_month", combine: mode.combine) {
+            monthly = m; tags = t
+            subs = api.cachedSubscriptions() ?? subs
+            splits = api.cachedSplits() ?? splits
+            history = api.cachedSettlements() ?? history
+            loaded = true
+        }
         do {
             async let m = api.breakdown(groupBy: "month", from: fromISO, combine: mode.combine)
             async let t = api.breakdown(groupBy: "tag", period: "this_month", combine: mode.combine)
@@ -159,7 +168,7 @@ struct InsightsView: View {
             Button { editing = InsightSpec() } label: {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Build your own chart").font(.system(size: 16, weight: .bold, design: .rounded)).foregroundStyle(Palette.ink)
-                    Text("Pick a merchant, category or tag, a range (today to a custom window) and a pie, bar or line chart. Pin it here or put it on your Home Screen as a widget.")
+                    Text("Compare anything: Food vs Fitness, two merchants, a tag vs everything. Pick a range (today to a custom window) and bars, stacked, lines, totals or a pie. Pin it here or put it on your Home Screen as a widget.")
                         .font(.system(size: 13, design: .rounded)).foregroundStyle(Palette.inkSoft)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)

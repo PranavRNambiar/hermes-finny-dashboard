@@ -7,12 +7,12 @@ import { Suspense, useEffect, useMemo, useState } from "react";
 import { Bar, BarChart, Cell, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { useApp, useHotkey } from "@/components/app";
 import { CurrencyPicker } from "@/components/currency-picker";
-import { InsightCard, InsightChart, newSpec, RANGES, Spec, specTitle, useInsight } from "@/components/insight";
+import { CHARTS, COLORS, InsightCard, InsightChart, migrate, newSpec, RANGES, SeriesDef, seriesLabel, Spec, SpecTotals, specTitle } from "@/components/insight";
 import { Amount, Card, Chip, Empty, Eyebrow, Kbd, Perf, Pills, ScreenHeader, Spinner } from "@/components/ui";
 import { api, Breakdown, cardLabel, CATEGORIES, compact, MODES, money, modeCombine, modeCurrency, prettyMerchant } from "@/lib/ui/finny";
 
 const KEY = "finny.insights";
-const load = (): Spec[] => { try { return JSON.parse(localStorage.getItem(KEY) ?? "[]"); } catch { return []; } };
+const load = (): Spec[] => { try { return (JSON.parse(localStorage.getItem(KEY) ?? "[]") as any[]).map(migrate); } catch { return []; } };
 const store = (s: Spec[]) => { try { localStorage.setItem(KEY, JSON.stringify(s)); } catch {} };
 
 export default function InsightsPage() {
@@ -29,7 +29,7 @@ function Insights() {
   useEffect(() => {
     if (params.get("new")) {
       const s = newSpec();
-      if (params.get("tag")) { s.scope = "tag"; s.value = params.get("tag")!; }
+      if (params.get("tag")) s.series = [{ kind: "tag", value: params.get("tag")! }];
       setEditing(s);
       router.replace("/insights", { scroll: false });
     }
@@ -167,16 +167,26 @@ function OnRepeat() {
 
 // ── Builder ────────────────────────────────────────────────
 
+const PRESETS: { label: string; series: SeriesDef[] }[] = [
+  { label: "Food vs Fitness", series: [{ kind: "category", value: "Food & Drink" }, { kind: "category", value: "Health & Fitness" }] },
+  { label: "Food vs Transport vs Shopping", series: [{ kind: "category", value: "Food & Drink" }, { kind: "category", value: "Transport" }, { kind: "category", value: "Shopping" }] },
+  { label: "Everything vs Food", series: [{ kind: "all", value: "" }, { kind: "category", value: "Food & Drink" }] },
+];
+
 function Builder({ spec: initial, onClose, onSave }: { spec: Spec; onClose: () => void; onSave: (s: Spec) => void }) {
   const { mode } = useApp();
-  const ccy = modeCurrency(mode);
   const [spec, setSpec] = useState<Spec>(initial);
+  const [adding, setAdding] = useState<SeriesDef["kind"]>("category");
   const [search, setSearch] = useState("");
   const set = (patch: Partial<Spec>) => setSpec((s) => ({ ...s, ...patch }));
-  const { data } = useInsight(spec, mode);
   const merchants = useQuery({ queryKey: ["merchants"], staleTime: 300_000, queryFn: () => api<{ merchants: { name: string; count: number; last: string; renamed: boolean }[] }>("merchants") });
   const meta = useQuery({ queryKey: ["meta"], staleTime: 300_000, queryFn: () => api<{ tags: { name: string }[] }>("meta") });
-  const ok = spec.scope === "all" || !!spec.value;
+  const ok = spec.series.length > 0 && spec.series.every((x) => x.kind === "all" || x.value);
+  const has = (d: SeriesDef) => spec.series.some((x) => x.kind === d.kind && x.value === d.value);
+  const toggle = (d: SeriesDef) => {
+    if (has(d)) set({ series: spec.series.filter((x) => !(x.kind === d.kind && x.value === d.value)) });
+    else set({ series: [...spec.series.filter((x) => x.kind !== "all" || d.kind === "all"), d].slice(0, 8) });
+  };
 
   useEffect(() => {
     const k = (e: KeyboardEvent) => {
@@ -189,7 +199,7 @@ function Builder({ spec: initial, onClose, onSave }: { spec: Spec; onClose: () =
 
   return (
     <div className="fixed inset-0 z-40 flex justify-end bg-black/25" onMouseDown={onClose}>
-      <div className="flex h-full w-full max-w-[560px] flex-col overflow-y-auto bg-canvas p-5" onMouseDown={(e) => e.stopPropagation()}>
+      <div className="flex h-full w-full max-w-[600px] flex-col overflow-y-auto bg-canvas p-5" onMouseDown={(e) => e.stopPropagation()}>
         <div className="mb-4 flex items-center justify-between">
           <h2 className="display text-[22px]">Insight</h2>
           <div className="flex gap-2">
@@ -199,49 +209,81 @@ function Builder({ spec: initial, onClose, onSave }: { spec: Spec; onClose: () =
             </button>
           </div>
         </div>
+
         <section className="card mb-5">
-          <Eyebrow>{specTitle(spec)}</Eyebrow>
-          <div className="mb-2 mt-1 text-ink"><Amount value={data?.[ccy]?.total ?? 0} currency={ccy} size={28} weight={700} /></div>
-          <InsightChart spec={spec} data={ok ? data?.[ccy] : undefined} currency={ccy} />
+          <Eyebrow className="truncate">{specTitle(spec)}</Eyebrow>
+          <div className="mb-3 mt-1"><SpecTotals spec={spec} mode={mode} size={24} /></div>
+          <InsightChart spec={spec} mode={mode} />
         </section>
-        <Eyebrow className="mb-2">Chart</Eyebrow>
-        <Pills className="mb-5" options={[{ id: "bar", label: "Bars" }, { id: "line", label: "Line" }, { id: "pie", label: "Pie" }]} value={spec.chart} onChange={(chart) => set({ chart })} />
-        <Eyebrow className="mb-2">Range</Eyebrow>
+
+        <Eyebrow className="mb-2">Comparing</Eyebrow>
         <div className="mb-3 flex flex-wrap gap-2">
-          {RANGES.map((r) => <Chip key={r.id} on={spec.range === r.id} onClick={() => set(r.id === "custom" && !spec.from
-            ? { range: "custom", from: new Date(Date.now() - 90 * 864e5).toISOString().slice(0, 10), to: new Date().toISOString().slice(0, 10) } : { range: r.id })}>{r.label}</Chip>)}
+          {spec.series.map((d, i) => (
+            <button key={`${d.kind}:${d.value}`} onClick={() => toggle(d)}
+              className="flex h-8 items-center gap-1.5 rounded-full bg-surface pl-2.5 pr-3 text-[12px] font-bold text-ink">
+              <span className="h-2.5 w-2.5 rounded-full" style={{ background: COLORS[i % COLORS.length] }} />
+              {seriesLabel(d)} <span className="text-muted">✕</span>
+            </button>
+          ))}
+          {spec.series.length === 0 && <span className="text-[13px] text-muted">Add at least one thing below.</span>}
         </div>
-        {spec.range === "custom" && (
-          <div className="card mb-5 flex gap-3 !p-3">
-            <label className="flex-1 text-[12px] font-semibold text-muted">From<input type="date" value={spec.from} max={spec.to} onChange={(e) => set({ from: e.target.value })} className="mt-1 w-full rounded-xl bg-canvas px-3 py-2 text-[14px] text-ink" /></label>
-            <label className="flex-1 text-[12px] font-semibold text-muted">To<input type="date" value={spec.to} min={spec.from} onChange={(e) => set({ to: e.target.value })} className="mt-1 w-full rounded-xl bg-canvas px-3 py-2 text-[14px] text-ink" /></label>
-          </div>
-        )}
-        <Eyebrow className="mb-2 mt-2">Show</Eyebrow>
-        <Pills className="mb-3" options={[{ id: "all", label: "All" }, { id: "merchant", label: "Merchant" }, { id: "category", label: "Category" }, { id: "tag", label: "Tag" }]}
-          value={spec.scope} onChange={(scope) => set({ scope, value: "" })} />
-        {spec.scope === "category" && <div className="flex flex-wrap gap-2">{CATEGORIES.map((c) => <Chip key={c} on={spec.value === c} onClick={() => set({ value: c })}>{c}</Chip>)}</div>}
-        {spec.scope === "tag" && <div className="flex flex-wrap gap-2">{(meta.data?.tags ?? []).slice(0, 30).map((t) => <Chip key={t.name} on={spec.value === t.name} onClick={() => set({ value: t.name })}>#{t.name}</Chip>)}</div>}
-        {spec.scope === "merchant" && (
+        <div className="mb-5 flex flex-wrap gap-2">
+          <span className="eyebrow self-center">Quick:</span>
+          {PRESETS.map((p) => <button key={p.label} onClick={() => set({ series: p.series })} className="rounded-full bg-mint-soft px-3 py-1.5 text-[12px] font-bold text-mint">{p.label}</button>)}
+        </div>
+
+        <Eyebrow className="mb-2">Add to chart</Eyebrow>
+        <Pills className="mb-3" options={[{ id: "category", label: "Category" }, { id: "merchant", label: "Merchant" }, { id: "tag", label: "Tag" }, { id: "all", label: "All" }]}
+          value={adding} onChange={setAdding} />
+        {adding === "all" && <Chip on={has({ kind: "all", value: "" })} onClick={() => toggle({ kind: "all", value: "" })}>All spending</Chip>}
+        {adding === "category" && <div className="flex flex-wrap gap-2">{CATEGORIES.map((c) => <Chip key={c} on={has({ kind: "category", value: c })} onClick={() => toggle({ kind: "category", value: c })}>{c}</Chip>)}</div>}
+        {adding === "tag" && <div className="flex flex-wrap gap-2">{(meta.data?.tags ?? []).slice(0, 30).map((t) => <Chip key={t.name} on={has({ kind: "tag", value: t.name })} onClick={() => toggle({ kind: "tag", value: t.name })}>#{t.name}</Chip>)}</div>}
+        {adding === "merchant" && (
           <>
             <div className="mb-2 flex h-11 items-center gap-2 rounded-2xl bg-surface px-3">
               <Search size={15} className="text-muted" />
               <input autoFocus value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search merchants (your names too)"
                 className="flex-1 bg-transparent text-[14px] font-medium text-ink outline-none placeholder:text-muted" />
             </div>
-            <div className="card !py-2">
-              {(merchants.data?.merchants ?? []).filter((m) => !search || m.name.toLowerCase().includes(search.toLowerCase())).slice(0, 30).map((m) => (
-                <button key={m.name} onClick={() => set({ value: m.name })} className={`-mx-2 flex w-[calc(100%+16px)] items-center gap-2 rounded-xl px-2 py-2 text-left ${spec.value === m.name ? "bg-sunken" : "hover:bg-canvas"}`}>
-                  <span className="flex-1">
-                    <span className="flex items-center gap-1 text-[14px] font-semibold text-ink">{m.renamed ? m.name : prettyMerchant(m.name)}{m.renamed && <Pencil size={10} className="text-mint" />}</span>
-                    <span className="text-[11px] text-muted">{m.count} visits · last {m.last}</span>
-                  </span>
-                  {spec.value === m.name && <span className="text-mint">✓</span>}
-                </button>
-              ))}
+            <div className="card max-h-[300px] overflow-y-auto !py-2">
+              {(merchants.data?.merchants ?? []).filter((m) => !search || m.name.toLowerCase().includes(search.toLowerCase())).slice(0, 40).map((m) => {
+                const on = has({ kind: "merchant", value: m.name });
+                return (
+                  <button key={m.name} onClick={() => toggle({ kind: "merchant", value: m.name })}
+                    className={`-mx-2 flex w-[calc(100%+16px)] items-center gap-2 rounded-xl px-2 py-2 text-left ${on ? "bg-sunken" : "hover:bg-canvas"}`}>
+                    <span className="flex-1">
+                      <span className="flex items-center gap-1 text-[14px] font-semibold text-ink">{m.renamed ? m.name : prettyMerchant(m.name)}{m.renamed && <Pencil size={10} className="text-mint" />}</span>
+                      <span className="text-[11px] text-muted">{m.count} visits · last {m.last}</span>
+                    </span>
+                    {on && <span className="font-bold text-mint">✓</span>}
+                  </button>
+                );
+              })}
             </div>
           </>
         )}
+
+        <Eyebrow className="mb-2 mt-6">Range</Eyebrow>
+        <div className="mb-3 flex flex-wrap gap-2">
+          {RANGES.map((r) => <Chip key={r.id} on={spec.range === r.id} onClick={() => set(r.id === "custom" && !spec.from
+            ? { range: "custom", from: new Date(Date.now() - 90 * 864e5).toISOString().slice(0, 10), to: new Date().toISOString().slice(0, 10) } : { range: r.id })}>{r.label}</Chip>)}
+        </div>
+        {spec.range === "custom" && (
+          <div className="card mb-3 flex gap-3 !p-3">
+            <label className="flex-1 text-[12px] font-semibold text-muted">From<input type="date" value={spec.from} max={spec.to} onChange={(e) => set({ from: e.target.value })} className="mt-1 w-full rounded-xl bg-canvas px-3 py-2 text-[14px] text-ink" /></label>
+            <label className="flex-1 text-[12px] font-semibold text-muted">To<input type="date" value={spec.to} min={spec.from} onChange={(e) => set({ to: e.target.value })} className="mt-1 w-full rounded-xl bg-canvas px-3 py-2 text-[14px] text-ink" /></label>
+          </div>
+        )}
+
+        <Eyebrow className="mb-2 mt-3">Chart</Eyebrow>
+        <div className="grid grid-cols-5 gap-2">
+          {CHARTS.map((c) => (
+            <button key={c.id} onClick={() => set({ chart: c.id })} title={c.hint}
+              className={`rounded-2xl px-2 py-2.5 text-center text-[12px] font-bold ${spec.chart === c.id ? "bg-ink text-surface" : "bg-surface text-ink-soft"}`}>{c.label}</button>
+          ))}
+        </div>
+        <p className="mt-2 text-[12px] text-muted">{CHARTS.find((c) => c.id === spec.chart)!.hint}{spec.range === "today" && spec.chart !== "totals" && spec.chart !== "pie" ? " — for Today, Totals or Pie read best." : ""}</p>
+
         <label className="mt-5 flex items-center justify-between rounded-2xl bg-surface px-4 py-3 text-[14px] font-semibold text-ink">
           Pin to Insights <input type="checkbox" checked={spec.pinned} onChange={(e) => set({ pinned: e.target.checked })} className="h-5 w-5 accent-[var(--mint)]" />
         </label>

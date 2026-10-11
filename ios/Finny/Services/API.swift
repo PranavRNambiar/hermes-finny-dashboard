@@ -1,4 +1,40 @@
+import CryptoKit
 import Foundation
+
+/// Last good response for every GET, in memory and on disk. Screens paint from it instantly,
+/// then refresh in the background (stale-while-revalidate).
+@MainActor
+enum ResponseCache {
+    private static var memory: [String: Data] = [:]
+    private static let dir: URL = {
+        let d = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appending(path: "api", directoryHint: .isDirectory)
+        try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+        return d
+    }()
+
+    private static func file(_ key: String) -> URL {
+        dir.appending(path: SHA256.hash(data: Data(key.utf8)).map { String(format: "%02x", $0) }.joined())
+    }
+
+    static func get(_ key: String) -> Data? {
+        if let d = memory[key] { return d }
+        guard let d = try? Data(contentsOf: file(key)) else { return nil }
+        memory[key] = d
+        return d
+    }
+
+    static func put(_ key: String, _ data: Data) {
+        memory[key] = data
+        let url = file(key)
+        Task.detached(priority: .utility) { try? data.write(to: url, options: .atomic) }
+    }
+
+    static func clear() {
+        memory = [:]
+        try? FileManager.default.removeItem(at: dir)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    }
+}
 
 /// Thin client for /api/v1/* on the Finny dashboard. Retries once with a fresh token on 401.
 @MainActor
@@ -12,10 +48,39 @@ struct API {
     func transactions(query: String? = nil, currency: String? = nil, card: String? = nil,
                       category: String? = nil, from: String? = nil, to: String? = nil,
                       offset: Int = 0, limit: Int = 50) async throws -> TxnPage {
-        try await get("transactions", [
-            "q": query, "currency": currency, "card": card, "category": category, "from": from, "to": to,
-            "offset": String(offset), "limit": String(limit),
-        ])
+        try await get("transactions", Self.txnParams(query, currency, card, category, from, to, offset, limit))
+    }
+
+    private static func txnParams(_ query: String?, _ currency: String?, _ card: String?, _ category: String?,
+                                  _ from: String?, _ to: String?, _ offset: Int, _ limit: Int) -> [String: String?] {
+        ["q": query, "currency": currency, "card": card, "category": category, "from": from, "to": to,
+         "offset": String(offset), "limit": String(limit)]
+    }
+
+    // MARK: Cached reads (instant, possibly stale; nil if never fetched)
+
+    func cachedOverview(_ period: Period, combine: String? = nil) -> Overview? {
+        peek("overview", Self.items(["period": period.rawValue, "combine": combine]))
+    }
+    func cachedTransactions(query: String?, currency: String?, card: String?, category: String?, from: String?, to: String?) -> TxnPage? {
+        peek("transactions", Self.items(Self.txnParams(query, currency, card, category, from, to, 0, 50)))
+    }
+    func cachedBreakdown(groupBy: String, period: String? = nil, from: String? = nil, currency: String? = nil, combine: String? = nil) -> [String: Breakdown]? {
+        peek("breakdown", Self.items(["group_by": groupBy, "period": period, "from": from, "currency": currency, "combine": combine]))
+    }
+    func cachedInsight(_ spec: InsightSpec, combine: String?) -> InsightData? {
+        let (path, q) = spec.request(combine: combine)
+        return path == "compare" ? (peek(path, q) as Compare?).map { InsightData(compare: $0) } : (peek(path, q) as [String: Breakdown]?).map { InsightData(breakdown: $0) }
+    }
+    func cachedSubscriptions() -> [Subscription]? { peek("subscriptions", []) }
+    func cachedSplits() -> Splits? { peek("splits", []) }
+    func cachedSettlements() -> [Settlement]? { (peek("splits/history", []) as SettlementPage?)?.settlements }
+    func cachedIncoming(period: Period) -> [Incoming]? { (peek("incoming", Self.items(["period": period.rawValue])) as IncomingPage?)?.incoming }
+    func cachedMeta() -> Meta? { peek("meta", []) }
+
+    func insight(_ spec: InsightSpec, combine: String?) async throws -> InsightData {
+        let (path, q) = spec.request(combine: combine)
+        return path == "compare" ? InsightData(compare: try await get(path, q)) : InsightData(breakdown: try await get(path, q))
     }
 
     func transaction(id: String) async throws -> Txn {
@@ -79,9 +144,6 @@ struct API {
 
     func merchants() async throws -> [MerchantInfo] { (try await get("merchants", [:]) as MerchantPage).merchants }
 
-    func breakdown(_ spec: InsightSpec, combine: String?) async throws -> [String: Breakdown] {
-        try await get("breakdown", spec.query(combine: combine).mapValues { Optional($0) })
-    }
     func subscriptions() async throws -> [Subscription] { try await get("subscriptions", [:]) }
     func meta() async throws -> Meta { try await get("meta", [:]) }
 
@@ -108,14 +170,31 @@ struct API {
         throw AuthError.signedOut
     }
 
-    private func get<T: Decodable>(_ path: String, _ params: [String: String?]) async throws -> T {
-        guard let base = auth.serverURL else { throw AuthError.signedOut }
-        var comps = URLComponents(url: base.appending(path: "api/v1/" + path), resolvingAgainstBaseURL: false)!
-        let items = params.compactMap { k, v in v.flatMap { $0.isEmpty ? nil : URLQueryItem(name: k, value: $0) } }
-        if !items.isEmpty { comps.queryItems = items }
+    /// Sorted so the same request always maps to the same cache entry.
+    private static func items(_ params: [String: String?]) -> [URLQueryItem] {
+        params.compactMap { k, v in v.flatMap { $0.isEmpty ? nil : URLQueryItem(name: k, value: $0) } }.sorted { $0.name < $1.name }
+    }
 
+    private func url(_ path: String, _ items: [URLQueryItem]) -> URL? {
+        guard let base = auth.serverURL,
+              var comps = URLComponents(url: base.appending(path: "api/v1/" + path), resolvingAgainstBaseURL: false) else { return nil }
+        if !items.isEmpty { comps.queryItems = items }
+        return comps.url
+    }
+
+    private func peek<T: Decodable>(_ path: String, _ items: [URLQueryItem]) -> T? {
+        guard let u = url(path, items), let d = ResponseCache.get(u.absoluteString) else { return nil }
+        return try? JSONDecoder().decode(T.self, from: d)
+    }
+
+    private func get<T: Decodable>(_ path: String, _ params: [String: String?]) async throws -> T {
+        try await get(path, Self.items(params))
+    }
+
+    private func get<T: Decodable>(_ path: String, _ items: [URLQueryItem]) async throws -> T {
+        guard let u = url(path, items) else { throw AuthError.signedOut }
         for attempt in 0..<2 {
-            var req = URLRequest(url: comps.url!)
+            var req = URLRequest(url: u)
             req.setValue("Bearer \(try await auth.validAccessToken(forceRefresh: attempt > 0))", forHTTPHeaderField: "Authorization")
             let (data, resp) = try await URLSession.shared.data(for: req)
             let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
@@ -124,7 +203,9 @@ struct API {
                 let msg = (try? JSONDecoder().decode([String: String].self, from: data))?["error"]
                 throw AuthError.message(msg ?? "Request failed (\(status)).")
             }
-            return try JSONDecoder().decode(T.self, from: data)
+            let out = try JSONDecoder().decode(T.self, from: data)
+            ResponseCache.put(u.absoluteString, data)
+            return out
         }
         throw AuthError.signedOut
     }

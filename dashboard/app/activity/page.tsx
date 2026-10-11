@@ -7,7 +7,7 @@ import { Suspense, useEffect, useRef, useState } from "react";
 import { useHotkey } from "@/components/app";
 import { TxnGroups } from "@/components/txn-list";
 import { Amount, Chip, Empty, Eyebrow, Perf, Pills, ScreenHeader, Spinner } from "@/components/ui";
-import { api, cardLabel, CATEGORIES, encId, Incoming, OVERVIEW_PERIODS, Period, prettyMerchant, send, Txn } from "@/lib/ui/finny";
+import { api, cardLabel, CATEGORIES, encId, Incoming, money, OVERVIEW_PERIODS, Period, prettyMerchant, send, Txn } from "@/lib/ui/finny";
 
 export default function ActivityPage() {
   return <Suspense fallback={<Spinner />}><Activity /></Suspense>;
@@ -49,11 +49,13 @@ function Spent({ params, setParam }: { params: URLSearchParams; setParam: (k: st
   const feed = useInfiniteQuery({
     queryKey: ["activity", q, currency, category, card, from, to],
     initialPageParam: 0,
-    queryFn: ({ pageParam }) => api<{ transactions: Txn[]; total: number }>("transactions", { q, currency, category, card, from, to, offset: pageParam, limit: 50 }),
+    queryFn: ({ pageParam }) => api<{ transactions: Txn[]; total: number; interpreted: string | null; totals: Record<string, number> }>("transactions", { q, currency, category, card, from, to, offset: pageParam, limit: 50 }),
+    placeholderData: (prev) => prev,
     getNextPageParam: (last, pages) => { const n = pages.reduce((a, p) => a + p.transactions.length, 0); return n < last.total ? n : undefined; },
   });
   const items = feed.data?.pages.flatMap((p) => p.transactions) ?? [];
   const total = feed.data?.pages[0]?.total ?? 0;
+  const first = feed.data?.pages[0];
 
   // Infinite scroll
   const sentinel = useRef<HTMLDivElement>(null);
@@ -69,7 +71,7 @@ function Spent({ params, setParam }: { params: URLSearchParams; setParam: (k: st
         className="mb-3 flex h-12 items-center gap-3 rounded-2xl bg-surface px-4">
         <Search size={17} className="text-muted" />
         <input ref={input} value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === "Escape" && (e.currentTarget as HTMLInputElement).blur()}
-          placeholder="Search merchants — your custom names too" className="flex-1 bg-transparent text-[15px] font-medium text-ink outline-none placeholder:text-muted" />
+          placeholder="Try “august”, “grab last month”, “food >20”, “#coffee”" className="flex-1 bg-transparent text-[15px] font-medium text-ink outline-none placeholder:text-muted" />
         {q && <button type="button" onClick={() => setParam("q", null)} className="text-muted"><X size={16} /></button>}
         <kbd className="kbd">F</kbd>
       </form>
@@ -87,6 +89,19 @@ function Spent({ params, setParam }: { params: URLSearchParams; setParam: (k: st
         </select>
         {(from || to) && <Chip on onClick={() => { setParam("from", null); setParam("to", null); }}>{from} → {to} ✕</Chip>}
       </div>
+      {q && first?.interpreted && (
+        <div className="card mb-4 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <div className="eyebrow">Showing</div>
+            <div className="text-[16px] font-bold text-ink">{first.interpreted}</div>
+          </div>
+          <div className="flex gap-4">
+            {Object.entries(first.totals ?? {}).map(([c, v]) => (
+              <div key={c} className="text-right"><div className="eyebrow">{total} · {c}</div><div className="tabular text-[20px] font-bold text-ink">{money(v, c)}</div></div>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="mb-2 px-1 text-[12px] text-muted">{total} transactions · <kbd className="kbd">J</kbd> <kbd className="kbd">K</kbd> to move, <kbd className="kbd">↵</kbd> to open</div>
       {feed.isLoading ? <Spinner /> : items.length === 0 ? <Empty emoji="🔍" title="Nothing here" text="Either you were good, or the bank was slow." /> : (
         <TxnGroups items={items} onEnd={() => feed.hasNextPage && feed.fetchNextPage()} />

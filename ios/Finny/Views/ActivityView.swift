@@ -6,6 +6,8 @@ import SwiftUI
 final class TxnFeed {
     var items: [Txn] = []
     var total = 0
+    var interpreted: String?
+    var totals: [String: Double] = [:]
     var loading = false
     var error: String?
 
@@ -18,28 +20,49 @@ final class TxnFeed {
 
     private var generation = 0
 
+    /// First page again. Shows the last copy of it straight away, then swaps in the fresh one.
     func reload(_ api: API) async {
         generation += 1
-        items = []
-        total = 0
-        await loadMore(api)
+        let gen = generation
+        let q = query.trimmingCharacters(in: .whitespaces)
+        if let cached = api.cachedTransactions(query: q, currency: currency, card: card, category: category, from: from, to: to) {
+            apply(cached, replace: true)
+        } else {
+            items = []; total = 0; interpreted = nil; totals = [:]
+        }
+        loading = true
+        defer { if gen == generation { loading = false } }
+        do {
+            let page = try await api.transactions(query: q, currency: currency, card: card, category: category,
+                                                  from: from, to: to, offset: 0, limit: 50)
+            guard gen == generation else { return }
+            apply(page, replace: true)
+            error = nil
+        } catch {
+            if gen == generation, !(error is CancellationError) { self.error = error.localizedDescription }
+        }
     }
 
     func loadMore(_ api: API) async {
-        guard !loading, items.isEmpty || items.count < total else { return }
+        guard !loading, items.count < total else { return }
         let gen = generation
         loading = true
         defer { loading = false }
         do {
-            let page = try await api.transactions(query: query, currency: currency, card: card, category: category,
-                                                  from: from, to: to, offset: items.count, limit: 50)
+            let page = try await api.transactions(query: query.trimmingCharacters(in: .whitespaces), currency: currency, card: card,
+                                                  category: category, from: from, to: to, offset: items.count, limit: 50)
             guard gen == generation else { return }
-            items += page.transactions
-            total = page.total
+            apply(page, replace: false)
             error = nil
         } catch {
             self.error = error.localizedDescription
         }
+    }
+
+    private func apply(_ page: TxnPage, replace: Bool) {
+        items = replace ? page.transactions : items + page.transactions
+        total = page.total
+        if replace { interpreted = page.interpreted; totals = page.totals ?? [:] }
     }
 
     var grouped: [(day: String, txns: [Txn])] {
@@ -67,6 +90,7 @@ struct ActivityView: View {
                     if side == "Spent" {
                         searchField
                         filterChips
+                        if !feed.query.isEmpty, let what = feed.interpreted { searchSummary(what) }
                         TxnSections(feed: feed)
                     } else {
                         IncomingSection()
@@ -85,19 +109,49 @@ struct ActivityView: View {
                     .presentationDetents([.medium, .large])
             }
             .task(id: changes.version) {
-                await feed.reload(API(auth: auth))
-                meta = try? await API(auth: auth).meta()
+                let api = API(auth: auth)
+                meta = api.cachedMeta()
+                await feed.reload(api)
+                meta = (try? await api.meta()) ?? meta
+            }
+            .onChange(of: feed.query) { _, _ in
+                // Search as you type, once typing pauses.
+                typing?.cancel()
+                typing = Task {
+                    try? await Task.sleep(for: .milliseconds(350))
+                    if !Task.isCancelled { await feed.reload(API(auth: auth)) }
+                }
             }
         }
     }
 
-    private func reload() { Task { await feed.reload(API(auth: auth)) } }
+    @State private var typing: Task<Void, Never>?
+
+    private func reload() { typing?.cancel(); Task { await feed.reload(API(auth: auth)) } }
+
+    /// How the search was understood, plus what it adds up to.
+    private func searchSummary(_ what: String) -> some View {
+        HStack(alignment: .center) {
+            VStack(alignment: .leading, spacing: 2) {
+                Eyebrow("Showing")
+                Text(what).font(.system(size: 16, weight: .bold, design: .rounded)).foregroundStyle(Palette.ink)
+                Text("\(feed.total) transaction\(feed.total == 1 ? "" : "s")").font(.caption).foregroundStyle(Palette.muted)
+            }
+            Spacer()
+            VStack(alignment: .trailing, spacing: 2) {
+                ForEach(feed.totals.sorted(by: { $0.key > $1.key }), id: \.key) { c, v in
+                    AmountText(amount: v, currency: c, size: 20, weight: .bold)
+                }
+            }
+        }
+        .card(padding: 16)
+    }
 
     private var searchField: some View {
         @Bindable var feed = feed
         return HStack(spacing: 10) {
             Image(systemName: "magnifyingglass").foregroundStyle(Palette.muted)
-            TextField("Try “Grab” or “Koufu”", text: $feed.query)
+            TextField("Try “august”, “grab last month”, “food >20”", text: $feed.query)
                 .font(.system(size: 16, weight: .medium, design: .rounded))
                 .foregroundStyle(Palette.ink)
                 .focused($searching)
@@ -422,8 +476,10 @@ struct IncomingSection: View {
             }
         }
         .task(id: "\(period.rawValue)-\(changes.version)") {
-            loading = items.isEmpty
-            items = (try? await API(auth: auth).incoming(period: period)) ?? []
+            let api = API(auth: auth)
+            if let cached = api.cachedIncoming(period: period) { items = cached }
+            loading = api.cachedIncoming(period: period) == nil
+            items = (try? await api.incoming(period: period)) ?? items
             loading = false
         }
         .sheet(item: $editing) { i in IncomingKindSheet(item: i) }
