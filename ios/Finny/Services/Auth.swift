@@ -132,7 +132,7 @@ final class Auth: NSObject {
             .replacingOccurrences(of: "+", with: "%2B")
             .data(using: .utf8)
 
-        let (data, resp) = try await URLSession.shared.data(for: req)
+        let (data, resp) = try await Net.data(for: req)
         let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
         if status == 400 || status == 401 { throw AuthError.rejected }
         guard status == 200 else { throw AuthError.message("Server error (\(status)).") }

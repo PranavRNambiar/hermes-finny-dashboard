@@ -44,6 +44,15 @@ struct RootTabs: View {
         }
         .tint(Palette.ink)
         .onChange(of: tab) { _, _ in Feedback.play(.tap) }
+        // Widget taps: finny://overview, finny://insights/<id>
+        .onOpenURL { url in
+            switch url.host {
+            case "insights": tab = 2
+            case "activity": tab = 1
+            case "overview": tab = 0
+            default: break
+            }
+        }
     }
 }
 

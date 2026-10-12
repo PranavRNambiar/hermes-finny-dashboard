@@ -18,6 +18,33 @@ enum WidgetCurrency {
     static var label: String { combine == nil ? currency : "All in \(Money.symbol(currency))" }
 }
 
+// MARK: - Tap-to-change intents (iOS 17 interactive widgets)
+
+/// Tapping a period on the Spend widget switches what it highlights.
+struct SetSpendPeriod: AppIntent {
+    static let title: LocalizedStringResource = "Show spend for period"
+    @Parameter(title: "Period") var period: SpendPeriod
+    init() {}
+    init(_ p: SpendPeriod) { period = p }
+    func perform() async throws -> some IntentResult {
+        SharedStore.defaults.set(period.rawValue, forKey: "widget.spendPeriod")
+        return .result()
+    }
+}
+
+/// Tapping a range chip on an Insight widget re-draws it for that range (the saved insight is untouched).
+struct SetInsightRange: AppIntent {
+    static let title: LocalizedStringResource = "Change insight range"
+    @Parameter(title: "Insight") var insightID: String
+    @Parameter(title: "Range") var range: String
+    init() {}
+    init(id: String, range: InsightSpec.Range) { insightID = id; self.range = range.rawValue }
+    func perform() async throws -> some IntentResult {
+        SharedStore.defaults.set(range, forKey: "widget.range.\(insightID)")
+        return .result()
+    }
+}
+
 // MARK: - Spend widget
 
 enum SpendPeriod: String, AppEnum {
@@ -47,11 +74,15 @@ struct SpendProvider: AppIntentTimelineProvider {
     func placeholder(in context: Context) -> SpendEntry {
         SpendEntry(date: .now, period: .today, totals: ["today": 42.5, "this_week": 318.2, "this_month": 1184.27], counts: ["today": 3], error: nil)
     }
+    /// A period tapped on the widget wins over the one picked in its settings.
+    private func period(_ c: SpendConfig) -> SpendPeriod {
+        SharedStore.defaults.string(forKey: "widget.spendPeriod").flatMap(SpendPeriod.init(rawValue:)) ?? c.period
+    }
     func snapshot(for configuration: SpendConfig, in context: Context) async -> SpendEntry {
-        context.isPreview ? placeholder(in: context) : await load(configuration.period)
+        context.isPreview ? placeholder(in: context) : await load(period(configuration))
     }
     func timeline(for configuration: SpendConfig, in context: Context) async -> Timeline<SpendEntry> {
-        let entry = await load(configuration.period)
+        let entry = await load(period(configuration))
         // WidgetKit budgets refreshes; the app also reloads widgets whenever it sees new data.
         return Timeline(entries: [entry], policy: .after(.now.addingTimeInterval(15 * 60)))
     }
@@ -78,6 +109,7 @@ struct SpendWidget: Widget {
     var body: some WidgetConfiguration {
         AppIntentConfiguration(kind: "FinnySpend", intent: SpendConfig.self, provider: SpendProvider()) { entry in
             SpendWidgetView(entry: entry)
+                .widgetURL(URL(string: "finny://overview"))
                 .containerBackground(for: .widget) {
                     LinearGradient(colors: [Palette.inkCardHighlight, Palette.inkCard], startPoint: .topTrailing, endPoint: .bottomLeading)
                 }
@@ -106,12 +138,18 @@ struct SpendWidgetView: View {
                 header
                 HStack(alignment: .bottom, spacing: 14) {
                     ForEach([SpendPeriod.today, .this_week, .this_month], id: \.self) { p in
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(p.short.uppercased()).font(.system(size: 9, weight: .bold, design: .rounded)).tracking(1)
-                                .foregroundStyle(p == entry.period ? Palette.mint : .white.opacity(0.5))
-                            AmountText(amount: entry.totals?[p.rawValue] ?? 0, currency: ccy, size: p == entry.period ? 24 : 17, weight: .bold, color: .white)
+                        Button(intent: SetSpendPeriod(p)) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(p.short.uppercased()).font(.system(size: 9, weight: .bold, design: .rounded)).tracking(1)
+                                    .foregroundStyle(p == entry.period ? Palette.mint : .white.opacity(0.5))
+                                AmountText(amount: entry.totals?[p.rawValue] ?? 0, currency: ccy, size: p == entry.period ? 24 : 17, weight: .bold, color: .white)
+                                Text("\(entry.counts?[p.rawValue] ?? 0) txns").font(.system(size: 9, weight: .medium, design: .rounded))
+                                    .foregroundStyle(.white.opacity(p == entry.period ? 0.6 : 0.35))
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(.rect)
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .buttonStyle(.plain)
                     }
                 }
                 Spacer(minLength: 0)
@@ -121,8 +159,17 @@ struct SpendWidgetView: View {
             VStack(alignment: .leading, spacing: 4) {
                 header
                 Spacer(minLength: 0)
-                Text(entry.period.short.uppercased()).font(.system(size: 10, weight: .bold, design: .rounded)).tracking(1.2)
+                Button(intent: SetSpendPeriod(entry.period == .today ? .this_week : entry.period == .this_week ? .this_month : .today)) {
+                    HStack(spacing: 3) {
+                        Text(entry.period.short.uppercased()).tracking(1.2)
+                        Image(systemName: "chevron.up.chevron.down").font(.system(size: 8, weight: .heavy))
+                    }
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
                     .foregroundStyle(Palette.mint)
+                    .padding(.horizontal, 7).padding(.vertical, 3)
+                    .background(Palette.mint.opacity(0.15), in: .capsule)
+                }
+                .buttonStyle(.plain)
                 AmountText(amount: entry.totals?[entry.period.rawValue] ?? 0, currency: ccy, size: 30, weight: .bold, color: .white)
                 Text("\(entry.counts?[entry.period.rawValue] ?? 0) transactions")
                     .font(.system(size: 11, weight: .medium, design: .rounded)).foregroundStyle(.white.opacity(0.55))
@@ -197,8 +244,11 @@ struct InsightProvider: AppIntentTimelineProvider {
 
     private func load(_ config: InsightConfig) async -> InsightEntry {
         let all = SharedStore.insights
-        guard let spec = all.first(where: { $0.id.uuidString == config.insight?.id }) ?? all.first else {
+        guard var spec = all.first(where: { $0.id.uuidString == config.insight?.id }) ?? all.first else {
             return InsightEntry(date: .now, spec: nil, data: nil, error: "Build an insight in Finny → Insights")
+        }
+        if let r = SharedStore.defaults.string(forKey: "widget.range.\(spec.id.uuidString)").flatMap(InsightSpec.Range.init(rawValue:)), r != .custom {
+            spec.range = r
         }
         do {
             let d = try await FinnyClient.insight(spec, combine: WidgetCurrency.combine)
@@ -212,7 +262,9 @@ struct InsightProvider: AppIntentTimelineProvider {
 struct InsightWidget: Widget {
     var body: some WidgetConfiguration {
         AppIntentConfiguration(kind: "FinnyInsight", intent: InsightConfig.self, provider: InsightProvider()) { entry in
-            InsightWidgetView(entry: entry).containerBackground(Palette.surface, for: .widget)
+            InsightWidgetView(entry: entry)
+                .widgetURL(URL(string: "finny://insights/\(entry.spec?.id.uuidString ?? "")"))
+                .containerBackground(Palette.surface, for: .widget)
         }
         .configurationDisplayName("Insight")
         .description("A chart you built in Finny's Insights tab.")
@@ -229,7 +281,12 @@ struct InsightWidgetView: View {
             if let spec = entry.spec {
                 Text(spec.title.uppercased()).font(.system(size: 9, weight: .bold, design: .rounded)).tracking(1)
                     .foregroundStyle(Palette.muted).lineLimit(1)
-                totals
+                HStack(alignment: .center) {
+                    totals
+                    Spacer(minLength: 4)
+                    if family != .systemSmall { rangeChips(spec) }
+                }
+                if family == .systemSmall { rangeChips(spec) }
                 if let error = entry.error {
                     Spacer()
                     Text(error).font(.caption2).foregroundStyle(Palette.muted)
@@ -243,6 +300,23 @@ struct InsightWidgetView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    /// Tap to redraw the widget for another range.
+    private func rangeChips(_ spec: InsightSpec) -> some View {
+        let options: [InsightSpec.Range] = family == .systemSmall ? [.last_7_days, .this_month] : [.today, .last_7_days, .this_month, .last_30_days]
+        return HStack(spacing: 4) {
+            ForEach(options, id: \.self) { r in
+                Button(intent: SetInsightRange(id: spec.id.uuidString, range: r)) {
+                    Text(r.label)
+                        .font(.system(size: 9, weight: .bold, design: .rounded))
+                        .foregroundStyle(spec.range == r ? Palette.surface : Palette.inkSoft)
+                        .padding(.horizontal, 7).padding(.vertical, 4)
+                        .background(spec.range == r ? Palette.ink : Palette.hairline.opacity(0.6), in: .capsule)
+                }
+                .buttonStyle(.plain)
+            }
+        }
     }
 
     @ViewBuilder private var totals: some View {

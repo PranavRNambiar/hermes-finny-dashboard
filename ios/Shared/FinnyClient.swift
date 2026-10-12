@@ -32,7 +32,7 @@ struct FinnyClient {
         tokenReq.httpMethod = "POST"
         tokenReq.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         tokenReq.httpBody = "grant_type=refresh_token&client_id=finny-ios&refresh_token=\(refresh)".data(using: .utf8)
-        let (td, tr) = try await URLSession.shared.data(for: tokenReq)
+        let (td, tr) = try await Net.data(for: tokenReq)
         guard (tr as? HTTPURLResponse)?.statusCode == 200 else { throw Failure.signedOut }
         let access = try JSONDecoder().decode(Token.self, from: td).access_token
 
@@ -40,7 +40,7 @@ struct FinnyClient {
         if !items.isEmpty { comps.queryItems = items }
         var req = URLRequest(url: comps.url!)
         req.setValue("Bearer \(access)", forHTTPHeaderField: "Authorization")
-        let (data, resp) = try await URLSession.shared.data(for: req)
+        let (data, resp) = try await Net.data(for: req)
         let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
         guard status == 200 else { throw Failure.http(status) }
         return try JSONDecoder().decode(T.self, from: data)

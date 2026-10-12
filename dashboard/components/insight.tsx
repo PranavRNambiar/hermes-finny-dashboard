@@ -2,8 +2,10 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { MoreHorizontal, Pin, PinOff, SlidersHorizontal, Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
-import { Area, AreaChart, Bar, BarChart, Cell, Legend, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { graphic } from "echarts/core";
+import { useRouter } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
+import { ChartClick, EChart, Tokens, tooltipStyle, useTokens } from "./echart";
 import { api, Breakdown, compact, money, Mode, modeCombine, modeCurrency, prettyMerchant } from "@/lib/ui/finny";
 import { Amount, Eyebrow } from "./ui";
 
@@ -86,113 +88,167 @@ export function useInsight(s: Spec, mode: Mode, enabled = true) {
 
 // ── Chart ──────────────────────────────────────────────────
 
-export function InsightChart({ spec, mode, height = 210 }: { spec: Spec; mode: Mode; height?: number }) {
-  const ccy = modeCurrency(mode);
-  const { cmp, pie, ready } = useInsight(spec, mode);
-  if (!ready) return <Placeholder height={height} text="Pick what to show" />;
+const iso = (d: Date) => d.toLocaleDateString("en-CA", { timeZone: "Asia/Singapore" });
+const shift = (day: string, n: number) => { const d = new Date(`${day}T00:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
 
-  if (pieByCategory(spec)) {
-    const b = pie?.[ccy];
-    if (!b?.groups.length) return <Placeholder height={height} text="No spending in this range" />;
-    const top = b.groups.slice(0, 5); const rest = b.groups.slice(5);
-    const slices = rest.length ? [...top, { key: "Other", total: rest.reduce((a, g) => a + g.total, 0) }] : top;
-    return <Donut height={height} total={b.total} ccy={ccy} slices={slices.map((g) => ({ label: prettyMerchant(g.key), total: g.total }))} />;
+/** The dates a spec covers (same rules as the server's periods). */
+export function specRange(s: Spec): { from: string; to: string } {
+  const today = iso(new Date());
+  switch (s.range) {
+    case "custom": return { from: s.from ?? today, to: s.to ?? today };
+    case "today": return { from: today, to: today };
+    case "last_7_days": return { from: shift(today, -6), to: today };
+    case "last_30_days": return { from: shift(today, -29), to: today };
+    case "this_month": return { from: `${today.slice(0, 7)}-01`, to: today };
+    case "this_quarter": { const m = Number(today.slice(5, 7)); return { from: `${today.slice(0, 4)}-${String(Math.floor((m - 1) / 3) * 3 + 1).padStart(2, "0")}-01`, to: today }; }
+    case "this_year": return { from: `${today.slice(0, 4)}-01-01`, to: today };
   }
+}
 
-  const d = cmp?.data[ccy];
-  if (!d || d.series.every((x) => x.total === 0)) return <Placeholder height={height} text="No spending in this range" />;
+/** Activity link for one series (optionally narrowed to a time bucket). */
+export function drillHref(d: SeriesDef | null, from: string, to: string) {
+  const q = new URLSearchParams({ from, to });
+  if (d?.kind === "category") q.set("category", d.value);
+  if (d?.kind === "merchant") q.set("q", d.value);
+  if (d?.kind === "tag") q.set("q", `#${d.value}`);
+  return `/activity?${q}`;
+}
 
-  if (spec.chart === "pie") return <Donut height={height} total={d.series.reduce((a, x) => a + x.total, 0)} ccy={ccy} slices={d.series.map((x) => ({ label: x.label, total: x.total }))} />;
+function bucketRange(key: string, g: "day" | "week" | "month") {
+  if (g === "month") { const [y, m] = key.split("-").map(Number); return { from: `${key}-01`, to: new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10) }; }
+  return { from: key, to: g === "week" ? shift(key, 6) : key };
+}
 
-  if (spec.chart === "totals") {
-    const max = Math.max(...d.series.map((x) => x.total), 1);
+const keyLabel = (k: string, g: string, long = false) => {
+  const dt = new Date(`${k.length === 7 ? `${k}-01` : k}T00:00:00`);
+  if (g === "month") return dt.toLocaleDateString("en-SG", { month: long ? "long" : "short", year: long ? "numeric" : undefined });
+  const s = dt.toLocaleDateString("en-SG", { day: "numeric", month: "short", weekday: long && g === "day" ? "short" : undefined });
+  return g === "week" && long ? `Week of ${s}` : s;
+};
+
+export function InsightChart({ spec, mode, height = 230 }: { spec: Spec; mode: Mode; height?: number }) {
+  const ccy = modeCurrency(mode);
+  const router = useRouter();
+  const t = useTokens();
+  const { cmp, pie, ready } = useInsight(spec, mode);
+  const range = specRange(spec);
+
+  const view = useMemo(() => {
+    if (!t || !ready) return null;
+    if (pieByCategory(spec)) {
+      const b = pie?.[ccy];
+      if (!b?.groups.length) return null;
+      const top = b.groups.slice(0, 7); const rest = b.groups.slice(7);
+      const slices = rest.length ? [...top, { key: "Other", total: rest.reduce((a, g) => a + g.total, 0), count: 0, share_pct: 0 }] : top;
+      const one = spec.series[0];
+      return {
+        option: pieOption(t, ccy, slices.map((g) => ({ name: g.key === "Other" ? "Other" : prettyMerchant(g.key), raw: g.key, value: g.total })), b.total),
+        click: (e: ChartClick) => {
+          const raw = slices[e.dataIndex]?.key; if (!raw || raw === "Other") return;
+          // Slices are categories (for a merchant/all) or merchants (for a category/tag).
+          const sub: SeriesDef = one.kind === "category" || one.kind === "tag" ? { kind: "merchant", value: raw } : { kind: "category", value: raw };
+          router.push(drillHref(sub, range.from, range.to));
+        },
+      };
+    }
+    const d = cmp?.data[ccy];
+    if (!d || d.series.every((x) => x.total === 0)) return null;
+    const names = d.series.map((_, i) => seriesLabel(spec.series[i] ?? { kind: "all", value: "" }));
+    if (spec.chart === "pie") {
+      return {
+        option: pieOption(t, ccy, d.series.map((x, i) => ({ name: names[i], raw: names[i], value: x.total })), d.series.reduce((a, x) => a + x.total, 0)),
+        click: (e: ChartClick) => router.push(drillHref(spec.series[e.dataIndex] ?? null, cmp!.from, cmp!.to)),
+      };
+    }
+    if (spec.chart === "totals") return { totals: d.series.map((x, i) => ({ ...x, name: names[i] })) };
+    const g = cmp!.group_by;
+    return {
+      option: timeOption(t, ccy, spec.chart, g, d.keys, names, d.series.map((x) => x.points)),
+      click: (e: ChartClick) => { const r = bucketRange(d.keys[e.dataIndex], g); router.push(drillHref(spec.series[e.seriesIndex] ?? null, r.from, r.to)); },
+    };
+  }, [t, ready, spec, pie, cmp, ccy, router, range.from, range.to]);
+
+  if (!ready) return <Placeholder height={height} text="Pick what to show" />;
+  if (!view) return <Placeholder height={height} text={cmp || pie ? "No spending in this range" : ""} />;
+  if ("totals" in view && view.totals) {
+    const max = Math.max(...view.totals.map((x) => x.total), 1);
     return (
-      <div className="flex flex-col justify-center gap-3" style={{ minHeight: height }}>
-        {d.series.map((x, i) => (
-          <div key={x.label}>
+      <div className="flex flex-col justify-center gap-2" style={{ minHeight: Math.min(height, 60 * view.totals.length + 20) }}>
+        {view.totals.map((x, i) => (
+          <button key={i} onClick={() => router.push(drillHref(spec.series[i] ?? null, cmp!.from, cmp!.to))}
+            className="group -mx-2 rounded-xl px-2 py-1.5 text-left hover:bg-canvas" title="See these transactions">
             <div className="mb-1 flex justify-between text-[13px]">
-              <span className="font-semibold text-ink">{seriesLabel(spec.series[i])} <span className="text-muted">· {x.count}×</span></span>
+              <span className="font-semibold text-ink">{x.name} <span className="text-muted">· {x.count}×</span></span>
               <span className="tabular font-bold text-ink">{money(x.total, ccy)}</span>
             </div>
-            <div className="h-3 rounded-full bg-sunken"><div className="h-full rounded-full" style={{ width: `${(x.total / max) * 100}%`, background: COLORS[i % COLORS.length] }} /></div>
-          </div>
+            <div className="h-3 rounded-full bg-sunken"><div className="h-full rounded-full transition-[width] duration-700" style={{ width: `${(x.total / max) * 100}%`, background: COLORS[i % COLORS.length] }} /></div>
+          </button>
         ))}
       </div>
     );
   }
-
-  const rows = d.keys.map((k, ki) => Object.fromEntries([["key", k], ...d.series.map((x, si) => [`s${si}`, x.points[ki]])]));
-  const fmt = (k: string) => {
-    const dt = new Date(`${k.length === 7 ? `${k}-01` : k}T00:00:00`);
-    return cmp!.group_by === "month" ? dt.toLocaleDateString("en-SG", { month: "short" }) : dt.toLocaleDateString("en-SG", { day: "numeric", month: "short" });
-  };
-  const common = (
-    <>
-      <XAxis dataKey="key" tickFormatter={fmt} tick={{ fill: "var(--muted)", fontSize: 10, fontWeight: 600 }} axisLine={false} tickLine={false} minTickGap={20} />
-      <YAxis orientation="right" tickFormatter={(v) => compact(v)} tick={{ fill: "var(--muted)", fontSize: 10 }} axisLine={false} tickLine={false} width={36} />
-      <Tooltip cursor={{ fill: "var(--sunken)" }} content={({ active, payload, label }) => active && payload?.length ? (
-        <div className="rounded-xl bg-ink px-3 py-2 text-[12px] font-semibold text-surface">
-          <div className="mb-1 opacity-60">{fmt(String(label))}</div>
-          {payload.map((p, i) => <div key={i} className="flex justify-between gap-4"><span style={{ color: p.color }}>● {seriesLabel(spec.series[Number(String(p.dataKey).slice(1))])}</span><span>{money(Number(p.value), ccy)}</span></div>)}
-        </div>) : null} />
-      {d.series.length > 1 && <Legend formatter={(v) => <span className="text-[11px] font-semibold text-ink-soft">{seriesLabel(spec.series[Number(String(v).slice(1))])}</span>} iconType="circle" iconSize={7} />}
-    </>
-  );
-  return (
-    <div style={{ height }}>
-      <ResponsiveContainer>
-        {spec.chart === "line" ? (
-          <AreaChart data={rows}>
-            {common}
-            {d.series.map((_, i) => (
-              <Area key={i} type="monotone" dataKey={`s${i}`} stroke={COLORS[i % COLORS.length]} strokeWidth={2.5}
-                fill={COLORS[i % COLORS.length]} fillOpacity={d.series.length > 1 ? 0.06 : 0.15} dot={rows.length <= 31 ? { r: 2 } : false} />
-            ))}
-          </AreaChart>
-        ) : (
-          <BarChart data={rows}>
-            {common}
-            {d.series.map((_, i) => (
-              <Bar key={i} dataKey={`s${i}`} fill={COLORS[i % COLORS.length]} stackId={spec.chart === "stacked" ? "a" : undefined}
-                radius={spec.chart === "stacked" ? (i === d.series.length - 1 ? [4, 4, 0, 0] : 0) : [4, 4, 0, 0]} />
-            ))}
-          </BarChart>
-        )}
-      </ResponsiveContainer>
-    </div>
-  );
+  return <EChart option={view.option!} height={height} onClick={view.click} />;
 }
+
+function timeOption(t: Tokens, ccy: string, chart: ChartKind, g: string, keys: string[], names: string[], data: number[][]) {
+  const multi = names.length > 1;
+  const zoom = keys.length > 21;
+  return {
+    animationDuration: 600, animationEasing: "cubicOut",
+    color: t.series,
+    grid: { left: 4, right: 44, top: multi ? 34 : 12, bottom: zoom ? 34 : 4, containLabel: true },
+    legend: multi ? { top: 0, left: 0, icon: "circle", itemWidth: 8, itemHeight: 8, itemGap: 14, textStyle: { color: t.inkSoft, fontFamily: t.font, fontWeight: 700, fontSize: 11 } } : undefined,
+    tooltip: {
+      trigger: "axis", ...tooltipStyle(t),
+      axisPointer: chart === "line" ? { type: "line", lineStyle: { color: t.muted, type: "dashed" } } : { type: "shadow", shadowStyle: { color: t.sunken, opacity: 0.6 } },
+      formatter: (ps: any[]) => {
+        const rows = ps.map((p) => `<div style="display:flex;justify-content:space-between;gap:18px"><span>${p.marker}${p.seriesName}</span><b>${money(p.value, ccy)}</b></div>`).join("");
+        const sum = multi && chart === "stacked" ? `<div style="margin-top:4px;opacity:.7;display:flex;justify-content:space-between"><span>Total</span><b>${money(ps.reduce((a, p) => a + p.value, 0), ccy)}</b></div>` : "";
+        return `<div style="opacity:.6;margin-bottom:4px">${keyLabel(keys[ps[0].dataIndex], g, true)}</div>${rows}${sum}<div style="opacity:.5;margin-top:4px;font-size:10px">Click to see transactions</div>`;
+      },
+    },
+    dataZoom: zoom ? [{ type: "inside", start: Math.max(0, 100 - (30 / keys.length) * 100), end: 100 }, { type: "slider", height: 14, bottom: 4, borderColor: "transparent", backgroundColor: t.sunken, fillerColor: t.hairline, handleSize: 14, showDetail: false, brushSelect: false, dataBackground: { lineStyle: { color: t.muted }, areaStyle: { color: t.hairline } } }] : undefined,
+    xAxis: { type: "category", data: keys, boundaryGap: chart !== "line", axisLine: { show: false }, axisTick: { show: false },
+      axisLabel: { color: t.muted, fontFamily: t.font, fontWeight: 700, fontSize: 10, hideOverlap: true, formatter: (k: string) => keyLabel(k, g) } },
+    yAxis: { type: "value", position: "right", splitNumber: 3, splitLine: { lineStyle: { color: t.hairline, type: "dashed" } },
+      axisLabel: { color: t.muted, fontFamily: t.font, fontSize: 10, formatter: (v: number) => compact(v) } },
+    series: data.map((pts, i) => chart === "line" ? {
+      name: names[i], type: "line", data: pts, smooth: 0.35, symbol: "circle", symbolSize: 6, showSymbol: keys.length <= 31,
+      lineStyle: { width: 2.5 }, emphasis: { focus: "series" },
+      areaStyle: { opacity: multi ? 0.06 : 1, color: multi ? undefined : new graphic.LinearGradient(0, 0, 0, 1, [{ offset: 0, color: hexA(t.series[i], 0.35) }, { offset: 1, color: hexA(t.series[i], 0.02) }]) },
+    } : {
+      name: names[i], type: "bar", data: pts, stack: chart === "stacked" ? "a" : undefined, barMaxWidth: multi && chart === "bar" ? 14 : 26,
+      itemStyle: { borderRadius: chart === "stacked" ? (i === data.length - 1 ? [4, 4, 0, 0] : 0) : [4, 4, 0, 0] },
+      emphasis: { focus: "series" },
+    }),
+  };
+}
+
+function pieOption(t: Tokens, ccy: string, slices: { name: string; raw: string; value: number }[], total: number) {
+  return {
+    animationDuration: 700, color: t.series,
+    tooltip: { trigger: "item", ...tooltipStyle(t), formatter: (p: any) => `${p.marker}${p.name}<br/><b>${money(p.value, ccy)}</b> · ${Math.round(p.percent)}%<div style="opacity:.5;font-size:10px;margin-top:2px">Click to see transactions</div>` },
+    legend: { type: "scroll", orient: "vertical", right: 0, top: "middle", icon: "circle", itemWidth: 8, itemHeight: 8, itemGap: 9,
+      textStyle: { color: t.ink, fontFamily: t.font, fontWeight: 700, fontSize: 12, width: 120, overflow: "truncate" },
+      pageTextStyle: { color: t.muted }, pageIconColor: t.inkSoft },
+    title: { text: money(total, ccy), left: "29%", top: "middle", textAlign: "center", textStyle: { color: t.ink, fontFamily: t.font, fontSize: 16, fontWeight: 800 } },
+    series: [{
+      type: "pie", radius: ["58%", "88%"], center: ["30%", "50%"], padAngle: 2, itemStyle: { borderRadius: 5 },
+      label: { show: false }, emphasis: { scale: true, scaleSize: 6 }, data: slices.map((s) => ({ name: s.name, value: s.value })),
+    }],
+  };
+}
+
+const hexA = (c: string, a: number) => {
+  const m = /^#([0-9a-f]{6})$/i.exec(c.trim());
+  if (!m) return c;
+  const n = parseInt(m[1], 16);
+  return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${a})`;
+};
 
 const Placeholder = ({ height, text }: { height: number; text: string }) => (
   <div className="flex items-center justify-center text-[13px] text-muted" style={{ height }}>{text}</div>
 );
-
-function Donut({ height, total, ccy, slices }: { height: number; total: number; ccy: string; slices: { label: string; total: number }[] }) {
-  const sum = slices.reduce((a, x) => a + x.total, 0) || 1;
-  return (
-    <div className="flex items-center gap-5" style={{ height }}>
-      <div className="relative h-full flex-1">
-        <ResponsiveContainer>
-          <PieChart>
-            <Pie data={slices} dataKey="total" nameKey="label" innerRadius="60%" outerRadius="95%" paddingAngle={2} cornerRadius={4} stroke="none">
-              {slices.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
-            </Pie>
-          </PieChart>
-        </ResponsiveContainer>
-        <div className="tabular absolute inset-0 flex items-center justify-center text-[15px] font-bold text-ink">{money(total, ccy)}</div>
-      </div>
-      <div className="w-[46%] space-y-1.5">
-        {slices.map((g, i) => (
-          <div key={g.label} className="flex items-center gap-2 text-[12px]">
-            <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: COLORS[i % COLORS.length] }} />
-            <span className="flex-1 truncate font-semibold text-ink">{g.label}</span>
-            <span className="tabular font-bold text-muted">{Math.round((g.total / sum) * 100)}%</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
 
 /** Headline number for a spec: one series → its total; several → each, compactly. */
 export function SpecTotals({ spec, mode, size = 26 }: { spec: Spec; mode: Mode; size?: number }) {

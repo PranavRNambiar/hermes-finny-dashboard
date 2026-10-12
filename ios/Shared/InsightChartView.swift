@@ -7,7 +7,10 @@ struct InsightChartView: View {
     let spec: InsightSpec
     let data: InsightData?
     let currency: String
-    var compact = false   // widgets: fewer labels, no legend
+    var compact = false   // widgets: fewer labels, no legend, no touch
+
+    @State private var selected: Date?        // touch-and-drag crosshair on time charts
+    @State private var angle: Double?         // tapped pie slice
 
     static let colors: [Color] = [Palette.mint, Color(hex: 0x7C6FE0), Palette.coral, Color(hex: 0x3B82F6),
                                   Color(hex: 0xF2B544), Color(hex: 0xEC4899), Palette.inkSoft, Color(hex: 0x14B8A6)]
@@ -58,30 +61,56 @@ struct InsightChartView: View {
         }
     }
 
+    /// Index of the bucket a touched date falls in.
+    private func bucketIndex(_ d: Date, _ b: Compare.Block) -> Int? {
+        b.keys.lastIndex { date($0) <= d } ?? (b.keys.isEmpty ? nil : 0)
+    }
+
+    private var visibleLength: TimeInterval {
+        switch unit { case .month: 86400 * 366; case .weekOfYear: 86400 * 7 * 16; default: 86400 * 31 }
+    }
+
     private func timeChart(_ b: Compare.Block) -> some View {
         let names = b.series.indices.map { name($0, b) }
         let multi = b.series.count > 1
         let dots = !compact && b.keys.count <= 31
-        return Chart(points(b)) { p in
-            switch spec.chart {
-            case .line:
-                LineMark(x: .value("When", p.when, unit: unit), y: .value("Spend", p.value))
-                    .foregroundStyle(by: .value("Series", p.series))
-                    .lineStyle(StrokeStyle(lineWidth: 2.5, lineCap: .round))
-                    .interpolationMethod(.catmullRom)
-                    .symbol { if dots { Circle().frame(width: 4, height: 4) } }
-            case .stacked:
-                BarMark(x: .value("When", p.when, unit: unit), y: .value("Spend", p.value))
-                    .foregroundStyle(by: .value("Series", p.series))
-            default:
-                BarMark(x: .value("When", p.when, unit: unit), y: .value("Spend", p.value))
-                    .foregroundStyle(by: .value("Series", p.series))
-                    .position(by: .value("Series", p.series))
-                    .cornerRadius(compact ? 1.5 : 3)
+        let pick = selected.flatMap { bucketIndex($0, b) }
+        let scrolls = !compact && b.keys.count > (unit == .month ? 12 : unit == .weekOfYear ? 16 : 31)
+        return Chart {
+            ForEach(points(b)) { p in
+                switch spec.chart {
+                case .line:
+                    LineMark(x: .value("When", p.when, unit: unit), y: .value("Spend", p.value))
+                        .foregroundStyle(by: .value("Series", p.series))
+                        .lineStyle(StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                        .interpolationMethod(.catmullRom)
+                        .symbol { if dots { Circle().frame(width: 4, height: 4) } }
+                case .stacked:
+                    BarMark(x: .value("When", p.when, unit: unit), y: .value("Spend", p.value))
+                        .foregroundStyle(by: .value("Series", p.series))
+                        .opacity(pick == nil || date(b.keys[pick!]) == p.when ? 1 : 0.35)
+                default:
+                    BarMark(x: .value("When", p.when, unit: unit), y: .value("Spend", p.value))
+                        .foregroundStyle(by: .value("Series", p.series))
+                        .position(by: .value("Series", p.series))
+                        .cornerRadius(compact ? 1.5 : 3)
+                        .opacity(pick == nil || date(b.keys[pick!]) == p.when ? 1 : 0.35)
+                }
+            }
+            if let i = pick {
+                RuleMark(x: .value("When", date(b.keys[i]), unit: unit))
+                    .foregroundStyle(Palette.muted.opacity(0.5))
+                    .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
+                    .annotation(position: .top, spacing: 2, overflowResolution: .init(x: .fit(to: .chart), y: .disabled)) {
+                        callout(b, i, names: names)
+                    }
             }
         }
         .chartForegroundStyleScale(domain: names, range: names.indices.map(Self.color))
         .chartLegend(compact || !multi ? .hidden : .visible)
+        .chartXSelection(value: $selected)
+        .modifier(Scrolling(on: scrolls, length: visibleLength, end: b.keys.last.map(date)))
+        .sensoryFeedback(.selection, trigger: pick)
         .chartYAxis {
             AxisMarks(position: .trailing) { _ in
                 AxisGridLine().foregroundStyle(Palette.hairline)
@@ -97,6 +126,30 @@ struct InsightChartView: View {
                     .font(.system(size: compact ? 8 : 10, weight: .semibold, design: .rounded))
             }
         }
+    }
+
+    /// The floating card for a touched bucket: its date and each series' amount.
+    private func callout(_ b: Compare.Block, _ i: Int, names: [String]) -> some View {
+        let d = date(b.keys[i])
+        let when = unit == .month ? d.formatted(.dateTime.month(.wide).year())
+            : unit == .weekOfYear ? "Week of " + d.formatted(.dateTime.day().month(.abbreviated))
+            : d.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated))
+        return VStack(alignment: .leading, spacing: 3) {
+            Text(when).font(.system(size: 10, weight: .bold, design: .rounded)).foregroundStyle(Palette.surface.opacity(0.65))
+            ForEach(b.series.indices, id: \.self) { si in
+                HStack(spacing: 5) {
+                    Circle().fill(Self.color(si)).frame(width: 6, height: 6)
+                    if b.series.count > 1 { Text(names[si]).lineLimit(1) }
+                    Spacer(minLength: 6)
+                    Text(Money.format(b.series[si].points[i], currency)).monospacedDigit()
+                }
+                .font(.system(size: 12, weight: .bold, design: .rounded))
+                .foregroundStyle(Palette.surface)
+            }
+        }
+        .padding(.horizontal, 10).padding(.vertical, 7)
+        .frame(minWidth: 110, maxWidth: 200)
+        .background(Palette.ink, in: .rect(cornerRadius: 10, style: .continuous))
     }
 
     // MARK: Totals (best for Today)
@@ -136,19 +189,42 @@ struct InsightChartView: View {
         return rest.isEmpty ? top : top + [Slice(label: "Other", total: rest.map(\.total).reduce(0, +))]
     }
 
+    /// Which slice a tapped angle lands on.
+    private func sliceIndex(_ slices: [Slice]) -> Int? {
+        guard let angle else { return nil }
+        var run = 0.0
+        for (i, s) in slices.enumerated() { run += s.total; if angle <= run { return i } }
+        return nil
+    }
+
     private func pie(_ slices: [Slice], total: Double) -> some View {
         let sum = max(slices.map(\.total).reduce(0, +), 0.01)
+        let pick = compact ? nil : sliceIndex(slices)
         return HStack(spacing: compact ? 8 : 16) {
             Chart(Array(slices.enumerated()), id: \.offset) { i, s in
-                SectorMark(angle: .value("Spend", s.total), innerRadius: .ratio(0.6), angularInset: 1.5)
+                SectorMark(angle: .value("Spend", s.total), innerRadius: .ratio(pick == i ? 0.56 : 0.6),
+                           outerRadius: .ratio(pick == i ? 1 : 0.94), angularInset: 1.5)
                     .cornerRadius(3)
                     .foregroundStyle(Self.color(i))
+                    .opacity(pick == nil || pick == i ? 1 : 0.35)
             }
+            .chartAngleSelection(value: $angle)
+            .sensoryFeedback(.selection, trigger: pick)
             .chartBackground { _ in
-                Text(Money.format(total, currency, compact: true))
-                    .font(.system(size: compact ? 11 : 15, weight: .bold, design: .rounded).monospacedDigit())
-                    .foregroundStyle(Palette.ink)
-                    .minimumScaleFactor(0.6)
+                VStack(spacing: 1) {
+                    if let i = pick {
+                        Text(slices[i].label).font(.system(size: 10, weight: .bold, design: .rounded)).foregroundStyle(Palette.muted).lineLimit(1)
+                        Text(Money.format(slices[i].total, currency, compact: true))
+                            .font(.system(size: 15, weight: .bold, design: .rounded).monospacedDigit()).foregroundStyle(Palette.ink)
+                        Text("\(Int((slices[i].total / sum * 100).rounded()))%").font(.system(size: 10, weight: .bold, design: .rounded)).foregroundStyle(Self.color(i))
+                    } else {
+                        Text(Money.format(total, currency, compact: true))
+                            .font(.system(size: compact ? 11 : 15, weight: .bold, design: .rounded).monospacedDigit())
+                            .foregroundStyle(Palette.ink)
+                    }
+                }
+                .minimumScaleFactor(0.6)
+                .frame(maxWidth: 80)
             }
             if !compact || slices.count <= 4 {
                 VStack(alignment: .leading, spacing: compact ? 3 : 6) {
@@ -161,10 +237,28 @@ struct InsightChartView: View {
                             Text("\(Int((s.total / sum * 100).rounded()))%").font(.system(size: compact ? 9 : 11, weight: .bold, design: .rounded).monospacedDigit())
                                 .foregroundStyle(Palette.muted)
                         }
+                        .opacity(pick == nil || pick == i ? 1 : 0.4)
                     }
                 }
                 .frame(maxWidth: compact ? 90 : 150)
             }
+        }
+    }
+}
+
+/// Horizontal scrolling for long ranges, starting at the most recent data.
+private struct Scrolling: ViewModifier {
+    let on: Bool
+    let length: TimeInterval
+    let end: Date?
+    func body(content: Content) -> some View {
+        if on, let end {
+            content
+                .chartScrollableAxes(.horizontal)
+                .chartXVisibleDomain(length: length)
+                .chartScrollPosition(initialX: end.addingTimeInterval(-length))
+        } else {
+            content
         }
     }
 }

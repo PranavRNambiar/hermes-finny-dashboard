@@ -99,6 +99,8 @@ struct InsightsView: View {
             history = (try? await api.settlements()) ?? []
             withAnimation(.snappy) { loaded = true }
             error = nil
+        } catch is CancellationError {
+            return
         } catch {
             self.error = error.localizedDescription
         }
@@ -118,26 +120,7 @@ struct InsightsView: View {
                     Eyebrow("Monthly average")
                     AmountText(amount: avg, currency: currency, size: 30, weight: .bold)
                 }
-                Chart {
-                    ForEach(groups) { g in
-                        BarMark(x: .value("Month", monthLabel(g.key)), y: .value("Spend", g.total))
-                            .foregroundStyle(g.key == current ? AnyShapeStyle(Palette.mint.gradient) : AnyShapeStyle(Palette.ink.opacity(0.3)))
-                            .cornerRadius(6)
-                    }
-                    RuleMark(y: .value("Average", avg))
-                        .lineStyle(StrokeStyle(lineWidth: 1.2, dash: [2, 5]))
-                        .foregroundStyle(Palette.inkSoft)
-                }
-                .chartYAxis {
-                    AxisMarks(position: .trailing) { _ in
-                        AxisValueLabel(format: FloatingPointFormatStyle<Double>.number.notation(.compactName))
-                            .foregroundStyle(Palette.muted)
-                    }
-                }
-                .chartXAxis {
-                    AxisMarks { _ in AxisValueLabel().foregroundStyle(Palette.muted).font(.system(size: 10, weight: .semibold, design: .rounded)) }
-                }
-                .frame(height: 190)
+                MonthChart(groups: groups, avg: avg, current: current, currency: currency)
                 Text("Spikes are usually one-offs like tuition or flights. Tap a category on Overview to see the culprit.")
                     .font(.system(size: 12, design: .rounded))
                     .foregroundStyle(Palette.muted)
@@ -422,5 +405,62 @@ struct InsightsView: View {
         Dictionary(grouping: subs, by: \.currency)
             .map { ($0.key, $0.value.reduce(0) { $0 + $1.avg_amount }) }
             .sorted { $0.0 > $1.0 }
+    }
+}
+
+/// Month-by-month bars with the average line. Touch and drag to compare a month with the average.
+private struct MonthChart: View {
+    let groups: [Breakdown.Group]
+    let avg: Double
+    let current: String
+    let currency: String
+    @State private var selected: String?
+
+    private func label(_ k: String) -> String {
+        DateFormatter.isoDay.date(from: k + "-01")?.formatted(.dateTime.month(.abbreviated)) ?? k
+    }
+
+    var body: some View {
+        let pick = groups.first { label($0.key) == selected }
+        Chart {
+            ForEach(groups) { g in
+                BarMark(x: .value("Month", label(g.key)), y: .value("Spend", g.total))
+                    .foregroundStyle(g.key == current || pick?.key == g.key ? AnyShapeStyle(Palette.mint.gradient) : AnyShapeStyle(Palette.ink.opacity(0.3)))
+                    .opacity(pick == nil || pick?.key == g.key ? 1 : 0.5)
+                    .cornerRadius(6)
+            }
+            RuleMark(y: .value("Average", avg))
+                .lineStyle(StrokeStyle(lineWidth: 1.2, dash: [2, 5]))
+                .foregroundStyle(Palette.inkSoft)
+            if let g = pick {
+                RuleMark(x: .value("Month", label(g.key)))
+                    .foregroundStyle(.clear)
+                    .annotation(position: .top, spacing: 0, overflowResolution: .init(x: .fit(to: .chart), y: .disabled)) {
+                        let diff = avg > 0 ? Int(((g.total - avg) / avg * 100).rounded()) : 0
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(DateFormatter.isoDay.date(from: g.key + "-01")?.formatted(.dateTime.month(.wide).year()) ?? g.key)
+                                .font(.system(size: 10, weight: .bold, design: .rounded)).foregroundStyle(Palette.surface.opacity(0.65))
+                            Text(Money.format(g.total, currency)).font(.system(size: 14, weight: .bold, design: .rounded).monospacedDigit())
+                            Text("\(diff >= 0 ? "+" : "")\(diff)% vs average · \(g.count) txns").font(.system(size: 10, weight: .semibold, design: .rounded))
+                                .foregroundStyle(Palette.surface.opacity(0.75))
+                        }
+                        .foregroundStyle(Palette.surface)
+                        .padding(.horizontal, 10).padding(.vertical, 6)
+                        .background(Palette.ink, in: .rect(cornerRadius: 10, style: .continuous))
+                    }
+            }
+        }
+        .chartXSelection(value: $selected)
+        .sensoryFeedback(.selection, trigger: selected)
+        .chartYAxis {
+            AxisMarks(position: .trailing) { _ in
+                AxisValueLabel(format: FloatingPointFormatStyle<Double>.number.notation(.compactName))
+                    .foregroundStyle(Palette.muted)
+            }
+        }
+        .chartXAxis {
+            AxisMarks { _ in AxisValueLabel().foregroundStyle(Palette.muted).font(.system(size: 10, weight: .semibold, design: .rounded)) }
+        }
+        .frame(height: 190)
     }
 }

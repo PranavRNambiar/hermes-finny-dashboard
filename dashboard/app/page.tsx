@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ArrowDownRight, ArrowUpRight, ChevronRight, EyeOff, Merge } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
-import { Bar, BarChart, ResponsiveContainer, Tooltip, XAxis } from "recharts";
+import { DailyBars } from "@/components/charts";
 import { useApp, useHotkey } from "@/components/app";
 import { CurrencyPicker } from "@/components/currency-picker";
 import { TxnRow } from "@/components/txn-list";
@@ -50,18 +50,7 @@ export default function OverviewPage() {
               {data!.combined && (
                 <div className="mt-1 flex items-center gap-1.5 text-[11px] font-semibold text-white/50"><Merge size={12} /> SGD + INR combined at ₹{data!.combined.fx_rate.toFixed(2)}/S$ · {data!.combined.fx_date}</div>
               )}
-              <div className="mt-4 h-[72px]">
-                <ResponsiveContainer>
-                  <BarChart data={s.daily}>
-                    <Bar dataKey="total" fill="var(--mint)" radius={[3, 3, 0, 0]} />
-                    <XAxis dataKey="date" hide />
-                    <Tooltip cursor={{ fill: "rgba(255,255,255,.06)" }} content={({ active, payload }) => active && payload?.[0] ? (
-                      <div className="rounded-xl bg-white px-3 py-1.5 text-[12px] font-semibold text-[#1C2547]">
-                        {new Date(`${payload[0].payload.date}T00:00:00`).toLocaleDateString("en-SG", { day: "numeric", month: "short" })} · {money(payload[0].value as number, ccy)}
-                      </div>) : null} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
+              <div className="mt-4"><DailyBars daily={s.daily} ccy={ccy} /></div>
               <div className="perf perf-light my-4" />
               <div className="grid grid-cols-3">
                 <Stat label="vs prior">{s.change_pct == null ? <span className="text-white/50">—</span> : (

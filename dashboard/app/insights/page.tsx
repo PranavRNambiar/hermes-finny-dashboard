@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Pencil, Plus, Search } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState } from "react";
-import { Bar, BarChart, Cell, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { MonthBars } from "@/components/charts";
 import { useApp, useHotkey } from "@/components/app";
 import { CurrencyPicker } from "@/components/currency-picker";
 import { CHARTS, COLORS, InsightCard, InsightChart, migrate, newSpec, RANGES, SeriesDef, seriesLabel, Spec, SpecTotals, specTitle } from "@/components/insight";
@@ -93,19 +93,7 @@ function MonthTrend() {
     <Card title="Month by month" trailing={MODES.find((m) => m.id === mode)!.label}>
       <Eyebrow>Monthly average</Eyebrow>
       <div className="mb-3 text-ink"><Amount value={avg} currency={ccy} size={30} weight={700} /></div>
-      <div className="h-[200px]">
-        <ResponsiveContainer>
-          <BarChart data={groups}>
-            <XAxis dataKey="key" tickFormatter={(k) => new Date(`${k}-01T00:00:00`).toLocaleDateString("en-SG", { month: "short" }).toUpperCase()}
-              tick={{ fill: "var(--muted)", fontSize: 10, fontWeight: 700 }} axisLine={false} tickLine={false} />
-            <YAxis orientation="right" tickFormatter={(v) => compact(v)} tick={{ fill: "var(--muted)", fontSize: 10 }} axisLine={false} tickLine={false} width={36} />
-            <Tooltip cursor={{ fill: "var(--sunken)" }} content={({ active, payload }) => active && payload?.[0] ? (
-              <div className="rounded-xl bg-ink px-3 py-1.5 text-[12px] font-semibold text-surface">{money(payload[0].value as number, ccy)}</div>) : null} />
-            <ReferenceLine y={avg} stroke="var(--ink-soft)" strokeDasharray="2 5" />
-            <Bar dataKey="total" radius={[6, 6, 0, 0]}>{groups.map((g) => <Cell key={g.key} fill={g.key === current ? "var(--mint)" : "var(--ink-soft)"} fillOpacity={g.key === current ? 1 : 0.35} />)}</Bar>
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
+      <MonthBars groups={groups} avg={avg} ccy={ccy} />
       <p className="mt-2 text-[12px] text-muted">Spikes are usually one-offs like tuition. Move them to Exclusions (open the transaction, press X) to keep months honest.</p>
     </Card>
   );

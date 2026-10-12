@@ -61,6 +61,8 @@ struct HomeView: View {
             if !mode.isCombined, o.currencies[currency] == nil, o.currencies["INR"] != nil || o.currencies["SGD"] != nil {
                 mode = o.currencies["SGD"] != nil ? .sgd : .inr
             }
+        } catch is CancellationError {
+            return
         } catch {
             self.error = error.localizedDescription
         }
@@ -97,15 +99,7 @@ struct HomeView: View {
                     .foregroundStyle(.white.opacity(0.5))
             }
 
-            Chart(s.daily) { p in
-                BarMark(x: .value("Day", p.day, unit: .day), y: .value("Spend", p.total))
-                    .foregroundStyle(Palette.mint.gradient)
-                    .cornerRadius(3)
-            }
-            .chartXAxis(.hidden)
-            .chartYAxis(.hidden)
-            .frame(height: 64)
-            .padding(.top, 4)
+            DailyChart(daily: s.daily, currency: currency)
 
             Perforation(color: .white.opacity(0.18))
 
@@ -282,5 +276,46 @@ struct HomeView: View {
                 }
             }
         }
+    }
+}
+
+/// Hero spend-per-day bars. Touch and drag to read any day.
+private struct DailyChart: View {
+    let daily: [DailyPoint]
+    let currency: String
+    @State private var selected: Date?
+
+    private var pick: DailyPoint? {
+        guard let selected else { return nil }
+        return daily.first { Calendar.current.isDate($0.day, inSameDayAs: selected) }
+    }
+
+    var body: some View {
+        Chart {
+            ForEach(daily) { p in
+                BarMark(x: .value("Day", p.day, unit: .day), y: .value("Spend", p.total))
+                    .foregroundStyle(pick?.id == p.id ? AnyShapeStyle(Color.white) : AnyShapeStyle(Palette.mint.gradient))
+                    .opacity(pick == nil || pick?.id == p.id ? 1 : 0.4)
+                    .cornerRadius(3)
+            }
+            if let p = pick {
+                RuleMark(x: .value("Day", p.day, unit: .day))
+                    .foregroundStyle(.clear)
+                    .annotation(position: .top, spacing: 0, overflowResolution: .init(x: .fit(to: .chart), y: .disabled)) {
+                        Text("\(p.day.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated))) · \(Money.format(p.total, currency))")
+                            .font(.system(size: 12, weight: .bold, design: .rounded).monospacedDigit())
+                            .foregroundStyle(Palette.inkCard)
+                            .padding(.horizontal, 10).padding(.vertical, 5)
+                            .background(.white, in: .capsule)
+                    }
+            }
+        }
+        .chartXSelection(value: $selected)
+        .sensoryFeedback(.selection, trigger: pick?.id)
+        .chartXAxis(.hidden)
+        .chartYAxis(.hidden)
+        .frame(height: pick == nil ? 64 : 92)
+        .animation(.snappy(duration: 0.2), value: pick == nil)
+        .padding(.top, 4)
     }
 }

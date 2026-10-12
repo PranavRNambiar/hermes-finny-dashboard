@@ -165,7 +165,7 @@ struct API {
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
             req.setValue("Bearer \(try await auth.validAccessToken(forceRefresh: attempt > 0))", forHTTPHeaderField: "Authorization")
             req.httpBody = try JSONSerialization.data(withJSONObject: body)
-            let (data, resp) = try await URLSession.shared.data(for: req)
+            let (data, resp) = try await Net.data(for: req)
             let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
             if status == 401 && attempt == 0 { continue }
             if status == 403 {
@@ -206,7 +206,7 @@ struct API {
         for attempt in 0..<2 {
             var req = URLRequest(url: u)
             req.setValue("Bearer \(try await auth.validAccessToken(forceRefresh: attempt > 0))", forHTTPHeaderField: "Authorization")
-            let (data, resp) = try await URLSession.shared.data(for: req)
+            let (data, resp) = try await Net.data(for: req)
             let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
             if status == 401 && attempt == 0 { continue }
             guard (200..<300).contains(status) else {
