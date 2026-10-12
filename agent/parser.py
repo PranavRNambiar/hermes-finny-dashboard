@@ -72,6 +72,7 @@ INCOMING money — return the same fields with "direction": "in", "merchant" = w
 - Wise "You added X SGD to your account" / "Money added" → kind "own_transfer", merchant "Wise top-up".
 - Wise "You received X from NAME" → kind "transfer" (or "salary" by the same rule as DBS), merchant = NAME.
 SKIP card bill repayments ("Your repayment is successful", "Payment ... credited to your Card"), statements, OTPs, declined transactions and reminders — they are not money in or out.
+SKIP advance notices of an upcoming charge ("summary of your upcoming AutoPay transaction", "To be debited by", "will be debited") — the real debit arrives as its own email; recording both double-counts.
 
 If this email is neither an outgoing transaction nor incoming money (e.g. statement, promotional, reward, OTP, decline), return {"skip": true}.
 If you cannot extract amount or txn_date with confidence, return {"skip": true}.

@@ -233,8 +233,38 @@ export async function listTransactions(
 
 /** Every matching row, paged past PostgREST's 1000-row cap. For aggregation only, so
  *  Exclusions are dropped unless asked for (explicitly or by filtering on that category). */
+// ── Reversals ──────────────────────────────────────────────
+// A refund (Money in, kind "refund") that matches an earlier charge on the same card — same currency
+// and amount, within 30 days before it — cancels that charge, so totals show what you really spent.
+// The charge stays visible in lists; it just stops counting.
+let _refunds: { card: string; currency: string; amount: number; txn_date: string }[] = [];
+let _refundsAt = 0;
+
+async function ensureRefunds() {
+  if (Date.now() - _refundsAt < 30_000) return;
+  const { data, error } = await db().from("incoming").select("card, currency, amount, txn_date").eq("kind", "refund");
+  _refunds = error ? [] : (data ?? []);
+  _refundsAt = Date.now();
+}
+
+export function reversedIds(rows: Txn[]): Set<string> {
+  const byKey = new Map<string, Txn[]>();
+  for (const t of rows) {
+    const k = `${t.card}|${t.currency}|${(t.total_amount ?? t.amount).toFixed(2)}`;
+    (byKey.get(k) ?? byKey.set(k, []).get(k)!).push(t);
+  }
+  const used = new Set<string>();
+  for (const r of [..._refunds].sort((a, b) => a.txn_date.localeCompare(b.txn_date))) {
+    const cands = (byKey.get(`${r.card}|${r.currency}|${Number(r.amount).toFixed(2)}`) ?? [])
+      .filter((t) => !used.has(t.id) && t.txn_date <= r.txn_date && t.txn_date >= shiftDays(r.txn_date, -30))
+      .sort((a, b) => b.txn_date.localeCompare(a.txn_date));
+    if (cands[0]) used.add(cands[0].id);
+  }
+  return used;
+}
+
 async function fetchAll(f: TxnFilters, opts: { includeExcluded?: boolean } = {}): Promise<Txn[]> {
-  await Promise.all([ensureRules(), ensureSplits()]);
+  await Promise.all([ensureRules(), ensureSplits(), ensureRefunds()]);
   const keepExcluded = opts.includeExcluded || f.category === EXCLUDED;
   const out: Txn[] = [];
   const page = 1000;
@@ -246,7 +276,8 @@ async function fetchAll(f: TxnFilters, opts: { includeExcluded?: boolean } = {})
     out.push(...(data ?? []).map(cleanTxn));
     if (!data || data.length < page) break;
   }
-  return keepExcluded ? out : out.filter((t) => t.category !== EXCLUDED);
+  const reversed = reversedIds(out);
+  return out.filter((t) => !reversed.has(t.id) && (keepExcluded || t.category !== EXCLUDED));
 }
 
 export async function getTransaction(id: string): Promise<(Txn & { splits: any[] }) | null> {
@@ -420,12 +451,13 @@ export async function overview(period: Period = "this_month", combine?: Combine)
     };
   }
 
-  // Money in for the same window (own transfers/top-ups are shown but not counted as income).
+  // Money in for the same window. Own transfers/top-ups are shown but not counted as income, and
+  // refunds aren't either: they already cancel the charge they reverse (see reversedIds).
   let inRows = inRowsRaw;
   if (combine) inRows = (await convertRows(inRows as any, combine)).rows as any;
   const cash_flow: Record<string, any> = {};
   for (const ccy of new Set([...Object.keys(currencies), ...inRows.map((r) => r.currency)])) {
-    const ins = inRows.filter((r) => r.currency === ccy && r.kind !== "own_transfer");
+    const ins = inRows.filter((r) => r.currency === ccy && r.kind !== "own_transfer" && r.kind !== "refund");
     const by_kind: Record<string, number> = {};
     for (const r of ins) by_kind[r.kind] = round2((by_kind[r.kind] ?? 0) + r.amount);
     const inTotal = round2(ins.reduce((a, b) => a + b.amount, 0));
