@@ -226,6 +226,24 @@ enum Period: String, CaseIterable, Identifiable {
     }
 }
 
+/// A saved stretch of time to track on Overview, e.g. a trip. Kept until edited.
+struct CustomRange: Codable, Equatable {
+    var name = ""
+    var from = Date.now
+    var to: Date?          // nil = ongoing, up to today
+
+    var short: String {
+        if !name.isEmpty { return name }
+        let f = Date.FormatStyle().day().month(.abbreviated)
+        return "\(from.formatted(f))–\(to.map { $0.formatted(f) } ?? "now")"
+    }
+
+    func params(combine: String?) -> [String: String?] {
+        ["from": DateFormatter.isoDay.string(from: from), "to": to.map { DateFormatter.isoDay.string(from: $0) },
+         "label": name.isEmpty ? nil : name, "combine": combine]
+    }
+}
+
 extension String {
     var nilIfEmpty: String? { isEmpty ? nil : self }
 }

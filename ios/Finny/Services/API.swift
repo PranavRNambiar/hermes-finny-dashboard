@@ -45,6 +45,11 @@ struct API {
         try await get("overview", ["period": period.rawValue, "combine": combine])
     }
 
+    /// A custom range such as a trip; no end date means "up to today".
+    func overview(_ range: CustomRange, combine: String? = nil) async throws -> Overview {
+        try await get("overview", range.params(combine: combine))
+    }
+
     func transactions(query: String? = nil, currency: String? = nil, card: String? = nil,
                       category: String? = nil, from: String? = nil, to: String? = nil,
                       offset: Int = 0, limit: Int = 50) async throws -> TxnPage {
@@ -59,6 +64,9 @@ struct API {
 
     // MARK: Cached reads (instant, possibly stale; nil if never fetched)
 
+    func cachedOverview(_ range: CustomRange, combine: String? = nil) -> Overview? {
+        peek("overview", Self.items(range.params(combine: combine)))
+    }
     func cachedOverview(_ period: Period, combine: String? = nil) -> Overview? {
         peek("overview", Self.items(["period": period.rawValue, "combine": combine]))
     }

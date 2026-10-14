@@ -11,7 +11,7 @@ const GROUPS: { title: string; rows: [string[], string][] }[] = [
     [["G", "O"], "Overview"], [["G", "A"], "Activity"], [["G", "R"], "Money in"], [["G", "I"], "Insights"], [["G", "S"], "Splits"], [["G", "C"], "Cards"], [["G", "B"], "Finny bot"],
   ] },
   { title: "Lists", rows: [
-    [["J"], "Next transaction"], [["K"], "Previous transaction"], [["↵"], "Open"], [["1"], "→ [5]  Switch period (Overview)"],
+    [["J"], "Next transaction"], [["K"], "Previous transaction"], [["↵"], "Open"], [["1"], "→ [6]  Switch period (Overview; 6 = custom)"],
   ] },
   { title: "Transaction", rows: [
     [["T"], "Tag"], [["C"], "Category"], [["R"], "Rename merchant"], [["S"], "Split bill"], [["X"], "Move to Exclusions"],

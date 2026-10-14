@@ -7,6 +7,9 @@ struct HomeView: View {
     @Environment(DataChanges.self) private var changes
     @AppStorage("currencyMode") private var mode: CurrencyMode = .sgd
     @State private var period: Period = .this_month
+    @State private var useCustom = false
+    @State private var editingRange = false
+    @AppStorage("customRange") private var customData: Data?
     @State private var data: Overview?
     @State private var error: String?
 
@@ -20,7 +23,10 @@ struct HomeView: View {
                     ScreenHeader(eyebrow: Date.now.formatted(.dateTime.weekday(.wide).day().month(.wide)), title: "Overview") {
                         CurrencyPicker(mode: $mode)
                     }
-                    PillPicker(options: Period.overview, selection: $period) { $0.short }
+                    PillPicker(options: Period.overview.map(RangeChoice.preset) + [.custom], selection: choice) {
+                        switch $0 { case .preset(let p): p.short; case .custom: custom.map { String($0.short.prefix(10)) } ?? "Custom" }
+                    }
+                    if useCustom, let r = custom { customStrip(r) }
 
                     if let error, data == nil {
                         ErrorBanner(message: error) { Task { await load() } }
@@ -42,7 +48,13 @@ struct HomeView: View {
             .canvasBackground()
             .toolbar(.hidden, for: .navigationBar)
             .refreshable { Feedback.play(.tap); await load() }
-            .task(id: "\(period.rawValue)-\(mode.rawValue)-\(changes.version)") { await load() }
+            .task(id: "\(useCustom ? "custom-\(customData?.hashValue ?? 0)" : period.rawValue)-\(mode.rawValue)-\(changes.version)") { await load() }
+            .sheet(isPresented: $editingRange) {
+                CustomRangeSheet(initial: custom) { r in
+                    custom = r
+                    useCustom = r != nil
+                }
+            }
             .onChange(of: mode) { _, m in
                 SharedStore.currencyMode = m.rawValue   // widgets follow the same currency view
                 WidgetCenter.shared.reloadAllTimelines()
@@ -51,11 +63,57 @@ struct HomeView: View {
         }
     }
 
+    // MARK: Custom range (e.g. a trip)
+
+    enum RangeChoice: Hashable { case preset(Period), custom }
+
+    /// Saved on the device until edited, so hopping to another period and back keeps it.
+    private var custom: CustomRange? {
+        get { customData.flatMap { try? JSONDecoder().decode(CustomRange.self, from: $0) } }
+        nonmutating set { customData = newValue.flatMap { try? JSONEncoder().encode($0) } }
+    }
+
+    /// Tapping Custom opens the editor the first time, or when it's already selected.
+    private var choice: Binding<RangeChoice> {
+        Binding(
+            get: { useCustom && custom != nil ? .custom : .preset(period) },
+            set: { c in
+                switch c {
+                case .preset(let p): period = p; useCustom = false
+                case .custom:
+                    if custom == nil || useCustom { editingRange = true }
+                    if custom != nil { useCustom = true }
+                }
+            })
+    }
+
+    private func customStrip(_ r: CustomRange) -> some View {
+        let f = Date.FormatStyle().day().month(.abbreviated)
+        return Button { editingRange = true } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "airplane").font(.system(size: 14, weight: .bold)).foregroundStyle(Palette.mint)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(r.name.isEmpty ? "Custom range" : r.name).font(.system(size: 14, weight: .bold, design: .rounded)).foregroundStyle(Palette.ink)
+                    Text("\(r.from.formatted(f)) → \(r.to.map { $0.formatted(f) } ?? "today (ongoing)")\(data.map { " · \($0.period.days) day\($0.period.days == 1 ? "" : "s")" } ?? "")")
+                        .font(.system(size: 12, design: .rounded)).foregroundStyle(Palette.muted)
+                }
+                Spacer()
+                Label("Edit", systemImage: "pencil").font(.system(size: 12, weight: .bold, design: .rounded)).foregroundStyle(Palette.inkSoft)
+            }
+            .padding(.horizontal, 14).padding(.vertical, 10)
+            .background(Palette.surface, in: .rect(cornerRadius: 14, style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
+
     private func load() async {
         let api = API(auth: auth)
-        if let cached = api.cachedOverview(period, combine: mode.combine) { data = cached }
+        let r = useCustom ? custom : nil
+        let cached: Overview? = if let r { api.cachedOverview(r, combine: mode.combine) } else { api.cachedOverview(period, combine: mode.combine) }
+        if let cached { data = cached }
         do {
-            let o = try await api.overview(period, combine: mode.combine)
+            let o: Overview
+            if let r { o = try await api.overview(r, combine: mode.combine) } else { o = try await api.overview(period, combine: mode.combine) }
             withAnimation(.snappy) { data = o }
             error = nil
             if !mode.isCombined, o.currencies[currency] == nil, o.currencies["INR"] != nil || o.currencies["SGD"] != nil {
@@ -317,5 +375,58 @@ private struct DailyChart: View {
         .frame(height: pick == nil ? 64 : 92)
         .animation(.snappy(duration: 0.2), value: pick == nil)
         .padding(.top, 4)
+    }
+}
+
+/// Name, start and end (or ongoing) for a custom Overview range.
+private struct CustomRangeSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let initial: CustomRange?
+    let onSave: (CustomRange?) -> Void
+    @State private var name = ""
+    @State private var from = Date.now
+    @State private var ongoing = true
+    @State private var to = Date.now
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("Name (e.g. Spain trip)", text: $name)
+                    DatePicker("From", selection: $from, in: ...Date.now, displayedComponents: .date)
+                    Toggle("Ongoing", isOn: $ongoing)
+                    if !ongoing {
+                        DatePicker("To", selection: $to, in: from...max(from, .now), displayedComponents: .date)
+                    }
+                } footer: {
+                    Text(ongoing ? "Counts from the start date up to today, e.g. while you're still travelling. Stays saved until you change it."
+                                 : "Stays saved until you change it, even if you switch to another period.")
+                }
+                if initial != nil {
+                    Section {
+                        Button("Remove custom range", role: .destructive) { onSave(nil); dismiss() }
+                    }
+                }
+            }
+            .font(.system(size: 16, weight: .medium, design: .rounded))
+            .tint(Palette.mint)
+            .navigationTitle("Custom range")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Show") {
+                        Feedback.play(.success)
+                        onSave(CustomRange(name: name.trimmingCharacters(in: .whitespaces), from: from, to: ongoing ? nil : max(to, from)))
+                        dismiss()
+                    }
+                    .fontWeight(.bold)
+                }
+            }
+            .onAppear {
+                if let r = initial { name = r.name; from = r.from; ongoing = r.to == nil; to = r.to ?? .now }
+            }
+        }
+        .presentationDetents([.medium, .large])
     }
 }

@@ -397,8 +397,11 @@ export async function spendingBreakdown(
   return result;
 }
 
-export async function overview(period: Period = "this_month", combine?: Combine) {
-  const range = resolvePeriod(period);
+export async function overview(period: Period = "this_month", combine?: Combine, custom?: { from: string; to?: string; label?: string }) {
+  // A custom range (e.g. a trip): from a start date to an end date, or to today if it's ongoing.
+  const range = custom
+    ? { from: custom.from, to: custom.to && custom.to < todaySGT() ? custom.to : todaySGT(), label: custom.label || (custom.to ? `${custom.from} – ${custom.to}` : `since ${custom.from}`) }
+    : resolvePeriod(period);
   // Same-length window immediately before, for a like-for-like comparison.
   const days =
     (new Date(`${range.to}T00:00:00Z`).getTime() - new Date(`${range.from}T00:00:00Z`).getTime()) / 86400000 + 1;

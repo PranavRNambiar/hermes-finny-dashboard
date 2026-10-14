@@ -261,6 +261,8 @@ struct PillPicker<T: Hashable>: View {
                     Text(label(o).uppercased())
                         .font(.system(size: 11, weight: .bold, design: .rounded))
                         .tracking(0.8)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
                         .foregroundStyle(on ? Palette.surface : Palette.inkSoft)
                         .padding(.vertical, 9)
                         .frame(maxWidth: .infinity)

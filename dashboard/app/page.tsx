@@ -1,9 +1,9 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { ArrowDownRight, ArrowUpRight, ChevronRight, EyeOff, Merge } from "lucide-react";
+import { ArrowDownRight, ArrowUpRight, ChevronRight, EyeOff, Merge, Pencil, Plane } from "lucide-react";
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { DailyBars } from "@/components/charts";
 import { useApp, useHotkey } from "@/components/app";
 import { CurrencyPicker } from "@/components/currency-picker";
@@ -13,18 +13,32 @@ import { api, money, modeCombine, modeCurrency, Overview, OVERVIEW_PERIODS, Peri
 
 export default function OverviewPage() {
   const { mode, openTxn } = useApp();
-  const [period, setPeriod] = useState<Period>("this_month");
+  const [period, setPeriod] = useState<Period | "custom">("this_month");
+  const [custom, setCustom] = useState<CustomRange | null>(null);
+  const [editing, setEditing] = useState(false);
+  useEffect(() => setCustom(loadCustom()), []);
   const ccy = modeCurrency(mode);
   const dark = useDark();
+  const isCustom = period === "custom" && !!custom;
   const { data, isLoading, error } = useQuery({
-    queryKey: ["overview", period, mode],
-    queryFn: () => api<Overview>("overview", { period, combine: modeCombine(mode) }),
+    queryKey: ["overview", isCustom ? custom : period, mode],
+    enabled: period !== "custom" || !!custom,
+    placeholderData: (prev) => prev,
+    queryFn: () => api<Overview>("overview", isCustom
+      ? { from: custom!.from, to: custom!.to, label: custom!.name, combine: modeCombine(mode) }
+      : { period: period as Period, combine: modeCombine(mode) }),
   });
-  useHotkey("1", () => setPeriod(OVERVIEW_PERIODS[0].id));
-  useHotkey("2", () => setPeriod(OVERVIEW_PERIODS[1].id));
-  useHotkey("3", () => setPeriod(OVERVIEW_PERIODS[2].id));
-  useHotkey("4", () => setPeriod(OVERVIEW_PERIODS[3].id));
-  useHotkey("5", () => setPeriod(OVERVIEW_PERIODS[4].id));
+  const pick = (v: Period | "custom") => {
+    // Custom: open the editor the first time, or when tapped again while selected; otherwise reuse the saved range.
+    if (v === "custom" && (!custom || period === "custom")) setEditing(true);
+    if (v !== "custom" || custom) setPeriod(v);
+  };
+  useHotkey("1", () => pick(OVERVIEW_PERIODS[0].id));
+  useHotkey("2", () => pick(OVERVIEW_PERIODS[1].id));
+  useHotkey("3", () => pick(OVERVIEW_PERIODS[2].id));
+  useHotkey("4", () => pick(OVERVIEW_PERIODS[3].id));
+  useHotkey("5", () => pick(OVERVIEW_PERIODS[4].id));
+  useHotkey("6", () => pick("custom"));
 
   const s = data?.currencies[ccy];
   const cf = data?.cash_flow?.[ccy];
@@ -33,7 +47,20 @@ export default function OverviewPage() {
   return (
     <>
       <ScreenHeader eyebrow={today} title="Overview" right={<CurrencyPicker />} />
-      <Pills className="mb-5 max-w-[520px]" options={OVERVIEW_PERIODS.map((p) => ({ id: p.id, label: p.short }))} value={period} onChange={setPeriod} />
+      <Pills className={`${isCustom ? "mb-3" : "mb-5"} max-w-[640px]`} value={period} onChange={pick}
+        options={[...OVERVIEW_PERIODS.map((p) => ({ id: p.id as Period | "custom", label: p.short })), { id: "custom", label: custom ? customShort(custom) : "Custom" }]} />
+      {isCustom && (
+        <div className="mb-5 flex max-w-[640px] items-center gap-3 rounded-2xl bg-surface px-4 py-2.5">
+          <Plane size={16} className="text-mint" />
+          <div className="min-w-0 flex-1 text-[13px]">
+            <span className="font-bold text-ink">{custom!.name || "Custom range"}</span>
+            <span className="text-muted"> · {fmtDay(custom!.from)} → {custom!.to ? fmtDay(custom!.to) : "today (ongoing)"}{data ? ` · ${data.period.days} day${data.period.days === 1 ? "" : "s"}` : ""}</span>
+          </div>
+          <button onClick={() => setEditing(true)} className="flex items-center gap-1 text-[12px] font-bold text-ink-soft hover:text-ink"><Pencil size={12} /> Edit</button>
+        </div>
+      )}
+      {editing && <CustomRangeDialog initial={custom} onClose={() => setEditing(false)}
+        onSave={(r) => { saveCustom(r); setCustom(r); setPeriod(r ? "custom" : "this_month"); setEditing(false); }} />}
       {isLoading ? <Spinner /> : error ? <Empty emoji="🫠" title="Couldn't reach Finny" text={(error as Error).message} /> : !s ? (
         <Empty emoji="🧾" title="Clean slate" text={`No ${ccy} spend in this period.`} />
       ) : (
@@ -130,3 +157,48 @@ const Stat = ({ label, children }: { label: string; children: React.ReactNode })
 const Flow = ({ label, value, cls }: { label: string; value: string; cls: string }) => (
   <div><Eyebrow>{label}</Eyebrow><div className={`tabular mt-1 text-[20px] font-bold ${cls}`}>{value}</div></div>
 );
+
+// ── Custom range (e.g. a trip) ─────────────────────────────
+// Kept on this device until edited, so switching to Today and back keeps it.
+
+type CustomRange = { name: string; from: string; to: string | null };
+const CUSTOM_KEY = "finny.customRange";
+const loadCustom = (): CustomRange | null => { try { return JSON.parse(localStorage.getItem(CUSTOM_KEY) ?? "null"); } catch { return null; } };
+const saveCustom = (r: CustomRange | null) => { try { r ? localStorage.setItem(CUSTOM_KEY, JSON.stringify(r)) : localStorage.removeItem(CUSTOM_KEY); } catch {} };
+const fmtDay = (d: string) => new Date(`${d}T00:00:00`).toLocaleDateString("en-SG", { day: "numeric", month: "short" });
+const customShort = (r: CustomRange) => (r.name ? (r.name.length > 14 ? `${r.name.slice(0, 13)}…` : r.name) : `${fmtDay(r.from)}–${r.to ? fmtDay(r.to) : "now"}`);
+
+function CustomRangeDialog({ initial, onClose, onSave }: { initial: CustomRange | null; onClose: () => void; onSave: (r: CustomRange | null) => void }) {
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Singapore" });
+  const [name, setName] = useState(initial?.name ?? "");
+  const [from, setFrom] = useState(initial?.from ?? today);
+  const [ongoing, setOngoing] = useState(initial ? initial.to == null : true);
+  const [to, setTo] = useState(initial?.to ?? today);
+  const ok = !!from && (ongoing || (!!to && to >= from));
+  useEffect(() => {
+    const k = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); onClose(); } };
+    window.addEventListener("keydown", k, true);
+    return () => window.removeEventListener("keydown", k, true);
+  }, [onClose]);
+  const field = "mt-1 w-full rounded-xl bg-canvas px-3 py-2.5 text-[15px] font-semibold text-ink outline-none";
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onMouseDown={onClose}>
+      <form onSubmit={(e) => { e.preventDefault(); if (ok) onSave({ name: name.trim(), from, to: ongoing ? null : to }); }}
+        className="w-full max-w-[420px] space-y-3 rounded-[24px] bg-surface p-6" onMouseDown={(e) => e.stopPropagation()}>
+        <div className="display text-[22px]">Custom range</div>
+        <p className="text-[13px] text-ink-soft">Track a trip or any stretch of time. It stays saved until you change it.</p>
+        <label className="block text-[12px] font-semibold text-muted">Name (optional)<input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Spain trip" maxLength={40} className={field} /></label>
+        <div className="flex gap-2">
+          <label className="flex-1 text-[12px] font-semibold text-muted">From<input required type="date" value={from} max={today} onChange={(e) => setFrom(e.target.value)} className={field} /></label>
+          <label className="flex-1 text-[12px] font-semibold text-muted">To<input type="date" value={ongoing ? today : to} min={from} disabled={ongoing} onChange={(e) => setTo(e.target.value)} className={`${field} disabled:opacity-40`} /></label>
+        </div>
+        <label className="flex items-center justify-between rounded-2xl bg-canvas px-4 py-3 text-[14px] font-semibold text-ink">
+          <span>Ongoing <span className="block text-[12px] font-medium text-muted">Keeps counting up to today, e.g. while you’re still travelling</span></span>
+          <input type="checkbox" checked={ongoing} onChange={(e) => setOngoing(e.target.checked)} className="h-5 w-5 accent-[var(--mint)]" />
+        </label>
+        <button disabled={!ok} className="h-12 w-full rounded-2xl bg-ink font-bold text-surface disabled:opacity-40">Show this range</button>
+        {initial && <button type="button" onClick={() => onSave(null)} className="h-10 w-full rounded-2xl text-[13px] font-bold text-coral hover:bg-canvas">Remove custom range</button>}
+      </form>
+    </div>
+  );
+}
