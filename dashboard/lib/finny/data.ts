@@ -847,7 +847,7 @@ const CATEGORY_WORDS: Record<string, string> = {
   shopping: "Shopping", subscriptions: "Subscriptions", subscription: "Subscriptions", subs: "Subscriptions",
   health: "Health & Fitness", fitness: "Health & Fitness", gym: "Health & Fitness",
   travel: "Travel", flights: "Travel", bills: "Utilities & Bills", utilities: "Utilities & Bills",
-  rent: "Rent & Housing", housing: "Rent & Housing", entertainment: "Entertainment", education: "Education",
+  rent: "Rent & Housing", housing: "Rent & Housing", entertainment: "Entertainment", education: "Education", gift: "Gifts", gifts: "Gifts", present: "Gifts", presents: "Gifts",
   transfers: "Transfers & Misc", transfer: "Transfers & Misc", misc: "Transfers & Misc", exclusions: "Exclusions", excluded: "Exclusions",
 };
 
@@ -927,7 +927,7 @@ export function parseSearch(raw: string, cards: string[] = []): ParsedSearch {
 
 const CATEGORIES_ALL = [
   "Food & Drink", "Transport", "Shopping", "Subscriptions", "Health & Fitness", "Travel",
-  "Utilities & Bills", "Rent & Housing", "Entertainment", "Education", "Transfers & Misc", "Exclusions",
+  "Utilities & Bills", "Rent & Housing", "Entertainment", "Education", "Gifts", "Transfers & Misc", "Exclusions",
 ];
 
 let _cardSlugs: string[] = [];

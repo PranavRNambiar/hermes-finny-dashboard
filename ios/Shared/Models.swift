@@ -200,7 +200,7 @@ enum CurrencyMode: String, CaseIterable, Identifiable {
 
 let allCategories = [
     "Food & Drink", "Transport", "Shopping", "Subscriptions", "Health & Fitness", "Travel",
-    "Utilities & Bills", "Rent & Housing", "Entertainment", "Education", "Transfers & Misc", "Exclusions",
+    "Utilities & Bills", "Rent & Housing", "Entertainment", "Education", "Gifts", "Transfers & Misc", "Exclusions",
 ]
 
 /// Category for big one-offs (e.g. tuition): shown, but left out of every spending total.

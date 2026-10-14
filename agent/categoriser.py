@@ -19,6 +19,7 @@ CATEGORIES = [
     "Rent & Housing",
     "Entertainment",
     "Education",
+    "Gifts",
     "Transfers & Misc",
 ]
 

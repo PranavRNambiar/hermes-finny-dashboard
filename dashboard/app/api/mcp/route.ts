@@ -31,7 +31,7 @@ Rules:
 - Money received (salary, transfers in, refunds) is separate: use money_in, or cash_flow in spending_overview (income vs spend per currency). Own top-ups/transfers are not income. Currencies are SGD and INR and are NEVER summed together; report each currency separately. Use get_fx_rate only if the user asks for a combined figure, and say it is converted.
 - Dates are calendar dates in Asia/Singapore (SGT).
 - Start broad questions with spending_overview; use spending_breakdown for "by X" questions and list_transactions for specifics.
-- Categories are fixed: Food & Drink, Transport, Shopping, Subscriptions, Health & Fitness, Travel, Utilities & Bills, Rent & Housing, Entertainment, Education, Transfers & Misc, Exclusions.
+- Categories are fixed: Food & Drink, Transport, Shopping, Subscriptions, Health & Fitness, Travel, Utilities & Bills, Rent & Housing, Entertainment, Education, Gifts, Transfers & Misc, Exclusions.
 - "Exclusions" holds big one-offs the owner chose to keep out of spending (e.g. tuition). Totals and breakdowns already leave them out; spending_overview reports them separately under "excluded". Only include them if asked.
 - user_tag is a free-form label the owner sets (e.g. "date night"); category is set automatically.`;
 

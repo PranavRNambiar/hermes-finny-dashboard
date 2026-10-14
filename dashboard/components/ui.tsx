@@ -3,7 +3,7 @@
 // Finny primitives — web twins of ios/Shared/Theme.swift.
 
 import {
-  ArrowLeftRight, BookOpen, Bus, Coffee, EyeOff, Film, HeartPulse, Home, Plane, Repeat, ShoppingBag, Zap,
+  ArrowLeftRight, BookOpen, Bus, Coffee, EyeOff, Film, Gift, HeartPulse, Home, Plane, Repeat, ShoppingBag, Zap,
 } from "lucide-react";
 import { ReactNode, useEffect, useState } from "react";
 import { chip, number, symbol } from "@/lib/ui/finny";
@@ -58,7 +58,7 @@ export const Perf = ({ className = "" }: { className?: string }) => <div classNa
 
 const ICONS: Record<string, typeof Coffee> = {
   "Food & Drink": Coffee, Transport: Bus, Shopping: ShoppingBag, Subscriptions: Repeat, "Health & Fitness": HeartPulse,
-  Travel: Plane, "Utilities & Bills": Zap, "Rent & Housing": Home, Entertainment: Film, Education: BookOpen, Exclusions: EyeOff,
+  Travel: Plane, "Utilities & Bills": Zap, "Rent & Housing": Home, Entertainment: Film, Education: BookOpen, Gifts: Gift, Exclusions: EyeOff,
 };
 
 export function CategoryIcon({ category, size = 40 }: { category: string; size?: number }) {

@@ -62,7 +62,7 @@ CAT_EMOJI  = {
     "Food & Drink": "🍽️", "Transport": "🚗", "Shopping": "🛍️",
     "Subscriptions": "🔄", "Health & Fitness": "💪", "Travel": "✈️",
     "Utilities & Bills": "⚡", "Rent & Housing": "🏠", "Entertainment": "🎬",
-    "Education": "📚", "Transfers & Misc": "💸",
+    "Education": "📚", "Gifts": "🎁", "Transfers & Misc": "💸",
 }
 
 def fmt_amount(amount: float, currency: str) -> str:

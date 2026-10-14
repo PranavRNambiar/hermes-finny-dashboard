@@ -23,7 +23,7 @@ export type Incoming = { id: string; card: string; currency: string; amount: num
 
 export const CATEGORIES = [
   "Food & Drink", "Transport", "Shopping", "Subscriptions", "Health & Fitness", "Travel",
-  "Utilities & Bills", "Rent & Housing", "Entertainment", "Education", "Transfers & Misc", "Exclusions",
+  "Utilities & Bills", "Rent & Housing", "Entertainment", "Education", "Gifts", "Transfers & Misc", "Exclusions",
 ];
 
 // ── Currency mode (same four options as iOS) ───────────────
@@ -101,6 +101,7 @@ const CHIPS: Record<string, [string, string, string, string]> = {
   "Rent & Housing": ["#FFE8E3", "#C92A2A", "#3D1A17", "#FF8F87"],
   Entertainment: ["#FBE4FF", "#A61E9E", "#351838", "#F08CEB"],
   Education: ["#E5E8FF", "#3B49C9", "#1D2140", "#9CA6FF"],
+  Gifts: ["#FFF4D1", "#9A6A00", "#3A3013", "#FFD25E"],
   Exclusions: ["#ECEDF1", "#8A8FA8", "#20252E", "#7D839C"],
 };
 const FALLBACK: [string, string, string, string] = ["#EDEEF2", "#5F6485", "#232A35", "#A3A9C2"];

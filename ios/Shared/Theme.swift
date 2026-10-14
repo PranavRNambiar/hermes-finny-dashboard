@@ -35,6 +35,7 @@ enum Theme {
         case "Rent & Housing": (0xFFE8E3, 0xC92A2A, 0x3D1A17, 0xFF8F87)
         case "Entertainment": (0xFBE4FF, 0xA61E9E, 0x351838, 0xF08CEB)
         case "Education": (0xE5E8FF, 0x3B49C9, 0x1D2140, 0x9CA6FF)
+        case "Gifts": (0xFFF4D1, 0x9A6A00, 0x3A3013, 0xFFD25E)
         case "Exclusions": (0xECEDF1, 0x8A8FA8, 0x20252E, 0x7D839C)
         default: (0xEDEEF2, 0x5F6485, 0x232A35, 0xA3A9C2)
         }
@@ -53,6 +54,7 @@ enum Theme {
         case "Rent & Housing": "house.fill"
         case "Entertainment": "popcorn.fill"
         case "Education": "book.closed.fill"
+        case "Gifts": "gift.fill"
         case "Exclusions": "eye.slash.fill"
         default: "arrow.left.arrow.right"
         }
