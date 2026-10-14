@@ -163,6 +163,10 @@ Top transactions this week:
 
 
 def send_telegram(text: str) -> None:
+    from bot_settings import enabled
+    if os.environ.get("FINNY_FORCE") != "1" and not enabled("weekly_review"):
+        log.info("weekly_review switched off in the Finny bot settings — not sending")
+        return
     token   = os.environ["TELEGRAM_BOT_TOKEN"]
     chat_id = os.environ["TELEGRAM_CHAT_ID"]
     url     = f"https://api.telegram.org/bot{token}/sendMessage"

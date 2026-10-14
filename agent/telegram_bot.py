@@ -110,6 +110,9 @@ to a transaction notification ("split with Raj and Priya") — that gets recorde
 
 
 def send(chat_id: str | int, text: str) -> None:
+    from bot_settings import enabled
+    if not enabled("bot"):
+        return  # Finny bot switched off on the web: stay quiet
     token = os.environ["TELEGRAM_BOT_TOKEN"]
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     httpx.post(url, json={"chat_id": chat_id, "text": text}, timeout=15)

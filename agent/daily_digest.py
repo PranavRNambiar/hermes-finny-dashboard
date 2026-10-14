@@ -192,6 +192,10 @@ INR subscriptions:
 
 
 def send_telegram(text: str) -> None:
+    from bot_settings import enabled
+    if os.environ.get("FINNY_FORCE") != "1" and not enabled("daily_digest"):
+        log.info("daily_digest switched off in the Finny bot settings — not sending")
+        return
     token   = os.environ["TELEGRAM_BOT_TOKEN"]
     chat_id = os.environ["TELEGRAM_CHAT_ID"]
     url     = f"https://api.telegram.org/bot{token}/sendMessage"

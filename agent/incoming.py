@@ -30,4 +30,4 @@ def save_incoming(email_id: str, card: str, parsed: dict, notify: bool = True) -
     log.info("[%s] Incoming: %s %s%.2f (%s)", card.upper(), row["counterparty"], sym, row["amount"], kind)
     chat_id = os.environ.get("TELEGRAM_CHAT_ID")
     if notify and chat_id and kind != "own_transfer":
-        telegram_send(chat_id, f"💰 {card.upper()} · {KIND_LABEL.get(kind, kind)} · {row['counterparty']} · +{sym}{row['amount']:.2f}")
+        telegram_send(chat_id, f"💰 {card.upper()} · {KIND_LABEL.get(kind, kind)} · {row['counterparty']} · +{sym}{row['amount']:.2f}", kind="incoming")

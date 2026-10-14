@@ -73,11 +73,12 @@ def _check_and_nudge(card: str, currency: str, merchant: str, amount: float) -> 
         if daily_avg > 0 and today_total >= daily_avg * 1.5 and _nudged_spike.get(spike_key) != today:
             _nudged_spike[spike_key] = today
             multiplier = today_total / daily_avg
-            send(
+            telegram_send(
                 chat_id,
                 f"⚡ Spending spike · {currency}\n"
                 f"{sym}{today_total:.2f} today — {multiplier:.1f}× your usual {sym}{daily_avg:.0f}\n"
                 f"Latest: {merchant} {sym}{amount:.2f}",
+                kind="nudges",
             )
 
         # Budget threshold: crossed 80% of day budget
@@ -87,10 +88,11 @@ def _check_and_nudge(card: str, currency: str, merchant: str, amount: float) -> 
             _nudged_budget[budget_key] = today
             pct = int(today_total / day_budget * 100)
             remaining = max(0, day_budget - today_total)
-            send(
+            telegram_send(
                 chat_id,
                 f"🟡 Budget alert · {currency}\n"
                 f"{sym}{today_total:.2f} of {sym}{day_budget:.2f} used ({pct}%) · {sym}{remaining:.2f} left",
+                kind="nudges",
             )
     except Exception as exc:
         log.warning("Nudge check failed: %s", exc)
@@ -98,7 +100,7 @@ def _check_and_nudge(card: str, currency: str, merchant: str, amount: float) -> 
 # Cards come from the cards table (managed via the dashboard), with a
 # GMAIL_LABEL_* env fallback — see db.get_active_cards().
 CARD_REFRESH_INTERVAL = 300  # seconds between checks for newly added cards
-SCAN_POLL_INTERVAL    = 15   # seconds between checks for dashboard scan requests
+SCAN_POLL_INTERVAL    = 5    # seconds between checks for dashboard scan requests and bot jobs
 
 
 def fetch_body_and_msgid(server: IMAPClient, uid: int) -> tuple[str, str, str, str, str]:
@@ -270,7 +272,7 @@ def process_new_uids(server: IMAPClient, label: str, card: str, currency: str) -
                             "recurring to exclude, or skip."
                         )
 
-                message_id = telegram_send(chat_id, notify_msg)
+                message_id = telegram_send(chat_id, notify_msg, kind="transactions")
                 if message_id:
                     save_transaction_message(txn["id"], message_id)
         except Exception as exc:
@@ -316,6 +318,12 @@ def watch_label(card_config: dict) -> None:
             except Exception:
                 pass
             time.sleep(RECONNECT_WAIT)
+
+
+def process_bot_jobs() -> None:
+    """Serve one on-demand send from the web app's Finny bot page."""
+    from bot_jobs import run_next
+    run_next()
 
 
 def process_scan_requests() -> None:
@@ -370,7 +378,16 @@ def main() -> None:
     # Main loop: serve dashboard scan requests and pick up newly added cards
     last_card_refresh = time.time()
     last_scan_error = None
+    last_bot_error = None
     while True:
+        try:
+            process_bot_jobs()
+            last_bot_error = None
+        except Exception as exc:
+            # Log each distinct error once (e.g. bot_jobs table not created yet)
+            if str(exc) != last_bot_error:
+                last_bot_error = str(exc)
+                log.error("[BOT] Job worker error: %s", exc)
         try:
             process_scan_requests()
             last_scan_error = None

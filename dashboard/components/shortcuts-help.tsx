@@ -8,7 +8,7 @@ const GROUPS: { title: string; rows: [string[], string][] }[] = [
     [["⌘", "K"], "Command menu & search"], [["/"], "Search"], [["?"], "This cheat sheet"], [["M"], "Cycle currency: SGD → INR → All in S$ → All in ₹"], [["Esc"], "Close"],
   ] },
   { title: "Go to", rows: [
-    [["G", "O"], "Overview"], [["G", "A"], "Activity"], [["G", "R"], "Money in"], [["G", "I"], "Insights"], [["G", "S"], "Splits"], [["G", "C"], "Cards"],
+    [["G", "O"], "Overview"], [["G", "A"], "Activity"], [["G", "R"], "Money in"], [["G", "I"], "Insights"], [["G", "S"], "Splits"], [["G", "C"], "Cards"], [["G", "B"], "Finny bot"],
   ] },
   { title: "Lists", rows: [
     [["J"], "Next transaction"], [["K"], "Previous transaction"], [["↵"], "Open"], [["1"], "→ [5]  Switch period (Overview)"],

@@ -1,7 +1,7 @@
 "use client";
 
 import { QueryClient, QueryClientProvider, useIsFetching, useIsMutating, useQueryClient } from "@tanstack/react-query";
-import { BarChart3, CreditCard, LayoutGrid, List, LogOut, Search, Users } from "lucide-react";
+import { BarChart3, CreditCard, LayoutGrid, List, LogOut, Search, Users, Bot } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { createContext, ReactNode, useCallback, useContext, useEffect, useRef, useState } from "react";
@@ -30,6 +30,7 @@ export const NAV = [
   { href: "/insights", label: "Insights", icon: BarChart3, key: "i" },
   { href: "/splits", label: "Splits", icon: Users, key: "s" },
   { href: "/cards", label: "Cards", icon: CreditCard, key: "c" },
+  { href: "/bot", label: "Finny bot", icon: Bot, key: "b" },
 ];
 
 type Handler = (e: KeyboardEvent) => void;
@@ -180,7 +181,7 @@ function Shell({ children }: { children: ReactNode }) {
 
         {goPending && (
           <div className="fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-full bg-ink px-4 py-2 text-[12px] font-bold text-surface">
-            Go to… <span className="opacity-60">O A I S C R</span>
+            Go to… <span className="opacity-60">O A I S C B R</span>
           </div>
         )}
       </div>

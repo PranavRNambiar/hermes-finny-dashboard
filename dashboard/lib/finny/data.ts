@@ -1008,3 +1008,33 @@ function bucket(date: string, g: "day" | "week" | "month") {
   if (g === "week") { const dow = (new Date(`${date}T00:00:00Z`).getUTCDay() + 6) % 7; return shiftDays(date, -dow); }
   return date;
 }
+
+// ── Finny bot (Telegram) switches + on-demand sends ────────
+// Only the Telegram bot reads these; MCP (Claude/ChatGPT) is unaffected.
+
+export const BOT_KEYS = ["bot", "transactions", "incoming", "nudges", "daily_digest", "weekly_review"] as const;
+export const BOT_JOB_KINDS = ["transactions", "incoming", "daily_digest", "weekly_review", "test"] as const;
+
+export async function botStatus() {
+  const [s, j] = await Promise.all([
+    db().from("bot_settings").select("key, enabled, updated_at"),
+    db().from("bot_jobs").select("id, kind, status, result, created_at, completed_at").order("id", { ascending: false }).limit(12),
+  ]);
+  if (s.error || j.error) return { ready: false, settings: {}, jobs: [], error: (s.error ?? j.error)!.message };
+  const settings = Object.fromEntries(BOT_KEYS.map((k) => [k, s.data!.find((r: any) => r.key === k)?.enabled ?? true]));
+  return { ready: true, settings, jobs: j.data };
+}
+
+export async function setBotSetting(key: string, enabled: boolean) {
+  if (!(BOT_KEYS as readonly string[]).includes(key)) throw new Error("unknown switch");
+  const { error } = await db().from("bot_settings").upsert({ key, enabled, updated_at: new Date().toISOString() });
+  if (error) throw new Error(error.message);
+  return { key, enabled };
+}
+
+export async function queueBotJob(kind: string) {
+  if (!(BOT_JOB_KINDS as readonly string[]).includes(kind)) throw new Error("unknown message type");
+  const { data, error } = await db().from("bot_jobs").insert({ kind }).select("id, kind, status, created_at").single();
+  if (error) throw new Error(error.message);
+  return data;
+}

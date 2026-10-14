@@ -6,8 +6,14 @@ import httpx
 log = logging.getLogger(__name__)
 
 
-def send(chat_id: str | int, text: str) -> int | None:
-    """Send a Telegram message. Returns the sent message_id, or None on failure."""
+def send(chat_id: str | int, text: str, kind: str = "bot", force: bool = False) -> int | None:
+    """Send a Telegram message. Returns the sent message_id, or None on failure.
+    `kind` is checked against the Finny bot switches (bot_settings); `force` skips that
+    check for on-demand sends the owner asked for."""
+    from bot_settings import enabled
+    if not force and not enabled(kind):
+        log.info("Telegram %s message suppressed (switched off)", kind)
+        return None
     token = os.environ["TELEGRAM_BOT_TOKEN"]
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     try:
