@@ -2,7 +2,7 @@
 
 import { AlertCircle, Users } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { cardLabel, dayLabel, displayMerchant, money, Txn } from "@/lib/ui/finny";
+import { cardLabel, dayLabel, displayMerchant, foreignLabel, money, Txn } from "@/lib/ui/finny";
 import { useApp, useHotkey } from "./app";
 import { Amount, CategoryIcon, Eyebrow, Perf } from "./ui";
 
@@ -26,6 +26,7 @@ export function TxnRow({ t, selected, onClick }: { t: Txn; selected?: boolean; o
       </div>
       <div className="flex flex-col items-end gap-1">
         <Amount value={t.amount} currency={t.currency} size={16} className="text-ink" />
+        {foreignLabel(t) && <span className="tabular text-[11px] font-semibold text-muted" title="Paid in a foreign currency; converted for your totals">{foreignLabel(t)}</span>}
         {t.user_tag && <span className="text-[11px] font-semibold text-mint">#{t.user_tag}</span>}
       </div>
     </button>

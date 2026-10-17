@@ -27,6 +27,10 @@ export type Txn = {
   total_amount: number;
   /** Number of other people this was split with (0 = not split). */
   split_with: number;
+  /** Foreign spends: what was actually paid abroad (e.g. EUR 21.46); `amount` is converted. */
+  orig_currency?: string | null;
+  orig_amount?: number | null;
+  fx_rate?: number | null;
 };
 
 export type TxnFilters = {
@@ -42,8 +46,21 @@ export type TxnFilters = {
   max_amount?: number;
 };
 
-const TXN_COLUMNS =
+const BASE_COLUMNS =
   "id, card, currency, amount, merchant, category, txn_date, txn_time, ingested_at, anomaly_flagged, user_tag";
+const FX_COLUMNS = ", orig_currency, orig_amount, fx_rate";
+
+// Foreign-spend columns (supabase_fx.sql) are optional: probe once, re-check every minute until they exist.
+let _fxCols: boolean | null = null;
+let _fxColsAt = 0;
+async function txnColumns(): Promise<string> {
+  if (_fxCols === null || (!_fxCols && Date.now() - _fxColsAt > 60_000)) {
+    const { error } = await db().from("transactions").select("orig_currency").limit(1);
+    _fxCols = !error;
+    _fxColsAt = Date.now();
+  }
+  return BASE_COLUMNS + (_fxCols ? FX_COLUMNS : "");
+}
 
 let _client: SupabaseClient | null = null;
 
@@ -219,7 +236,7 @@ export async function listTransactions(
   await Promise.all([ensureRules(), ensureSplits()]);
   const limit = Math.min(200, Math.max(1, f.limit ?? 50));
   const offset = Math.max(0, f.offset ?? 0);
-  let q = db().from("transactions").select(TXN_COLUMNS, { count: "exact" });
+  let q = db().from("transactions").select(await txnColumns(), { count: "exact" });
   q = applyFilters(q, f);
   if (f.sort === "amount_desc") q = q.order("amount", { ascending: false });
   else {
@@ -268,8 +285,9 @@ async function fetchAll(f: TxnFilters, opts: { includeExcluded?: boolean } = {})
   const keepExcluded = opts.includeExcluded || f.category === EXCLUDED;
   const out: Txn[] = [];
   const page = 1000;
+  const cols = await txnColumns();
   for (let offset = 0; ; offset += page) {
-    let q = db().from("transactions").select(TXN_COLUMNS);
+    let q = db().from("transactions").select(cols);
     q = applyFilters(q, f);
     const { data, error } = await q.order("txn_date").order("id").range(offset, offset + page - 1);
     if (error) throw new Error(error.message);
@@ -284,7 +302,7 @@ export async function getTransaction(id: string): Promise<(Txn & { splits: any[]
   await Promise.all([ensureRules(), ensureSplits()]);
   const { data, error } = await db()
     .from("transactions")
-    .select(`${TXN_COLUMNS}, raw_desc`)
+    .select(`${await txnColumns()}, raw_desc`)
     .eq("id", id)
     .maybeSingle();
   if (error) throw new Error(error.message);

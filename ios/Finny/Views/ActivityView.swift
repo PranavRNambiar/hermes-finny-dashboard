@@ -336,6 +336,9 @@ struct TransactionRow: View {
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 4) {
                 AmountText(amount: txn.amount, currency: txn.currency, size: 16)
+                if let f = txn.foreignLabel {
+                    Text(f).font(.system(size: 11, weight: .semibold, design: .rounded).monospacedDigit()).foregroundStyle(Palette.muted)
+                }
                 if let tag = txn.user_tag {
                     Text("#\(tag)").font(.system(size: 11, weight: .semibold, design: .rounded)).foregroundStyle(Palette.mint)
                 }

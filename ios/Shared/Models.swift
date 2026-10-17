@@ -19,6 +19,16 @@ struct Txn: Decodable, Identifiable, Hashable {
     let total_amount: Double?
     let split_with: Int?
     let splits: [Split]?
+    /// Foreign spends: what was paid abroad (e.g. EUR 21.46). `amount` is converted.
+    let orig_currency: String?
+    let orig_amount: Double?
+    let fx_rate: Double?
+
+    /// "€21.46" for a foreign spend, else nil.
+    var foreignLabel: String? {
+        guard let c = orig_currency, let a = orig_amount else { return nil }
+        return Money.symbol(c) + a.formatted(.number.precision(.fractionLength(2)))
+    }
 
     var isSplit: Bool { (split_with ?? 0) > 0 }
     var fullAmount: Double { total_amount ?? amount }

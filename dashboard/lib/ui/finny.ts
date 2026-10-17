@@ -4,6 +4,7 @@ export type Txn = {
   id: string; card: string; currency: string; amount: number; total_amount: number; split_with: number;
   merchant: string | null; raw_merchant: string | null; category: string; txn_date: string; txn_time: string | null;
   anomaly_flagged: boolean; user_tag: string | null; raw_desc?: string | null;
+  orig_currency?: string | null; orig_amount?: number | null; fx_rate?: number | null;
   splits?: { split_id: number; person_id: number | null; person: string | null; share_amount: number; currency: string; status: string }[];
 };
 export type KeyTotal = { key: string; total: number };
@@ -48,7 +49,11 @@ export const OVERVIEW_PERIODS: { id: Period; short: string }[] = [
 
 // ── Money ──────────────────────────────────────────────────
 
-export const symbol = (c: string) => (c === "SGD" ? "S$" : c === "INR" ? "₹" : c === "USD" ? "$" : c);
+const SYMBOLS: Record<string, string> = { SGD: "S$", INR: "₹", USD: "US$", EUR: "€", GBP: "£", JPY: "¥", MYR: "RM", THB: "฿", AUD: "A$", HKD: "HK$", CHF: "CHF ", IDR: "Rp" };
+export const symbol = (c: string) => SYMBOLS[c] ?? `${c} `;
+/** "€21.46" for a foreign spend, else null. */
+export const foreignLabel = (t: Pick<Txn, "orig_currency" | "orig_amount">) =>
+  t.orig_currency && t.orig_amount != null ? `${symbol(t.orig_currency)}${Number(t.orig_amount).toFixed(2)}` : null;
 export function number(n: number, c: string) {
   const digits = c === "INR" || n >= 10_000 ? 0 : 2;
   return n.toLocaleString(c === "INR" ? "en-IN" : "en-SG", { minimumFractionDigits: digits, maximumFractionDigits: digits });

@@ -34,6 +34,17 @@ struct TransactionDetailView: View {
                         Text("Bank name: \(raw)").font(.system(size: 11, design: .monospaced)).foregroundStyle(Palette.muted)
                     }
                     AmountText(amount: t.amount, currency: t.currency, size: 48, weight: .bold)
+                    if let f = t.foreignLabel {
+                        VStack(spacing: 2) {
+                            Text("Paid \(f)" + (t.fx_rate.map { " · \(Money.symbol(t.currency))\($0.formatted(.number.precision(.fractionLength(4)))) per \(t.orig_currency ?? "")" } ?? ""))
+                                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                            if t.card == "dbs" {
+                                Text("Estimated at the day's rate + DBS's 3.25% fee; your statement may differ slightly")
+                                    .font(.system(size: 11, design: .rounded)).multilineTextAlignment(.center)
+                            }
+                        }
+                        .foregroundStyle(Palette.muted)
+                    }
                     if t.isSplit {
                         Text("Your share · \(Money.format(t.fullAmount, t.currency)) total, split with \(t.split_with ?? 0)")
                             .font(.system(size: 13, weight: .semibold, design: .rounded))

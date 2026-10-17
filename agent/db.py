@@ -142,7 +142,14 @@ def mark_processed(email_id: str, parse_failed: bool = False) -> None:
 def insert_transaction(txn: dict) -> None:
     """Insert a parsed transaction. Uses upsert to handle parse_failed retries safely."""
     db = get_client()
-    db.table("transactions").upsert(txn).execute()
+    try:
+        db.table("transactions").upsert(txn).execute()
+    except Exception as exc:
+        # supabase_fx.sql not run yet: store the converted amount without the original.
+        if "orig_" in str(exc) or "fx_rate" in str(exc):
+            db.table("transactions").upsert({k: v for k, v in txn.items() if k not in ("orig_currency", "orig_amount", "fx_rate")}).execute()
+        else:
+            raise
 
 
 # ── incoming money ───────────────────────────────────────────

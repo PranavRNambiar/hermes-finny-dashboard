@@ -228,6 +228,8 @@ def process_new_uids(server: IMAPClient, label: str, card: str, currency: str) -
             "txn_date": parsed["txn_date"],
             "txn_time": parsed.get("txn_time"),
         }
+        if parsed.get("orig_currency"):
+            txn.update(orig_currency=parsed["orig_currency"], orig_amount=parsed["orig_amount"], fx_rate=parsed.get("fx_rate"))
 
         try:
             merchant = parsed["merchant"] or ""

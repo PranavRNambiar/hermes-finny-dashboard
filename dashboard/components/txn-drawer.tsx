@@ -3,7 +3,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, Clock, Hash, LayoutGrid, Pencil, Users, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, CATEGORIES, cardLabel, displayMerchant, encId, money, prettyMerchant, send, symbol, Txn } from "@/lib/ui/finny";
+import { api, CATEGORIES, cardLabel, displayMerchant, encId, foreignLabel, money, prettyMerchant, send, symbol, Txn } from "@/lib/ui/finny";
 import { useApp } from "./app";
 import { Amount, CategoryIcon, CategoryTag, Eyebrow, Kbd, Perf } from "./ui";
 
@@ -68,6 +68,12 @@ export function TxnDrawer() {
               </button>
               {t.raw_merchant && t.raw_merchant !== t.merchant && <div className="font-mono text-[11px] text-muted">Bank name: {t.raw_merchant}</div>}
               <div className="mt-2 text-ink"><Amount value={t.amount} currency={t.currency} size={44} weight={700} /></div>
+              {foreignLabel(t) && (
+                <div className="mt-1 text-[13px] font-semibold text-muted">
+                  Paid {foreignLabel(t)}{t.fx_rate ? ` · ${symbol(t.currency)}${Number(t.fx_rate).toFixed(4)} per ${t.orig_currency}` : ""}
+                  {t.card === "dbs" && <span className="block text-[11px] font-medium">Estimated at the day’s rate + DBS’s 3.25% fee; your statement may differ slightly</span>}
+                </div>
+              )}
               {t.split_with > 0 && <div className="mt-1 text-[13px] font-semibold text-mint">Your share · {money(t.total_amount, t.currency)} total, split with {t.split_with}</div>}
               <button onClick={() => setPanel("category")} className="mt-3"><CategoryTag category={t.category} /></button>
               {t.category === "Exclusions" && <div className="mt-2 text-[12px] text-muted">Not counted in any totals</div>}

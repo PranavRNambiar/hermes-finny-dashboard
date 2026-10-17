@@ -32,6 +32,7 @@ Rules:
 - Dates are calendar dates in Asia/Singapore (SGT).
 - Start broad questions with spending_overview; use spending_breakdown for "by X" questions and list_transactions for specifics.
 - Categories are fixed: Food & Drink, Transport, Shopping, Subscriptions, Health & Fitness, Travel, Utilities & Bills, Rent & Housing, Entertainment, Education, Gifts, Transfers & Misc, Exclusions.
+- Foreign spends: amount is already converted to SGD/INR (DBS: the day's rate + 3.25% fee; Wise: what it actually took). orig_currency / orig_amount show what was paid abroad, e.g. EUR 21.46.
 - "Exclusions" holds big one-offs the owner chose to keep out of spending (e.g. tuition). Totals and breakdowns already leave them out; spending_overview reports them separately under "excluded". Only include them if asked.
 - user_tag is a free-form label the owner sets (e.g. "date night"); category is set automatically.`;
 

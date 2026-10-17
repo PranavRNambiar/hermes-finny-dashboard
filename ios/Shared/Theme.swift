@@ -98,8 +98,15 @@ enum Money {
         switch currency {
         case "SGD": "S$"
         case "INR": "₹"
-        case "USD": "$"
-        default: currency
+        case "USD": "US$"
+        case "EUR": "€"
+        case "GBP": "£"
+        case "JPY": "¥"
+        case "MYR": "RM"
+        case "THB": "฿"
+        case "AUD": "A$"
+        case "HKD": "HK$"
+        default: currency + " "
         }
     }
 

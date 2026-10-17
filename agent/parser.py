@@ -53,7 +53,7 @@ SKIP DBS eDocuments and card alert preference changes.
 
 ixigo (AU Small Finance Bank credit card) — transaction alert reads:
 "CUR X.XX were spent on your AU Bank Credit Card xx1234 at MERCHANT on DD-MM-YYYY at hh:mm:ss am/pm"
-- currency is the one stated in the email (SGD or INR)
+- currency is the one stated in the email (SGD or INR). If the spend was in another currency (e.g. "Amount: EUR21.46"), still return that number as amount — the code converts it.
 - merchant is the name after "at" (e.g. "UNIQLO CITY SQUARE", "TWENTY EIGHT CAFE PTE. LT") — clean it up
 - date is DD-MM-YYYY, time is 12-hour with am/pm (convert to 24h, e.g. "02:11:41 pm" → "14:11")
 SKIP AU Bank "Payment Alert" emails ("Payment of Rs.X was credited to your Card") — those are bill payments, not spends.
@@ -145,6 +145,10 @@ def parse_transaction(
             pass  # leave as-is if conversion fails
 
     parsed["direction"] = "in" if parsed.get("direction") == "in" else "out"
+    if parsed["direction"] == "out":
+        # Foreign spends: convert to the card's currency and keep the original (see fx.py).
+        from fx import apply as apply_fx
+        apply_fx(parsed, card, currency, email_body)
     if parsed["direction"] == "in" and parsed.get("kind") not in ("salary", "transfer", "refund", "own_transfer"):
         parsed["kind"] = "transfer"
     return parsed
