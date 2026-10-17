@@ -4,11 +4,14 @@ import subprocess
 import sys
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 import schedule
 from dotenv import load_dotenv
 
 load_dotenv()
+
+AGENT_DIR = Path(__file__).resolve().parent
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger(__name__)
 
@@ -26,7 +29,7 @@ def run_digest() -> None:
         log.info("[CRON] Digest already sent today, skipping")
         return
     log.info("[CRON] Running daily digest")
-    result = subprocess.run([sys.executable, "daily_digest.py"], capture_output=True, text=True, cwd="/app")
+    result = subprocess.run([sys.executable, "daily_digest.py"], capture_output=True, text=True, cwd=AGENT_DIR)
     if result.stdout:
         log.info("[CRON] %s", result.stdout.strip())
     if result.stderr:
@@ -42,7 +45,7 @@ def run_weekly() -> None:
         log.info("[CRON] Weekly review already sent this week, skipping")
         return
     log.info("[CRON] Running weekly review")
-    result = subprocess.run([sys.executable, "weekly_review.py"], capture_output=True, text=True, cwd="/app")
+    result = subprocess.run([sys.executable, "weekly_review.py"], capture_output=True, text=True, cwd=AGENT_DIR)
     if result.stdout:
         log.info("[CRON] %s", result.stdout.strip())
     if result.stderr:

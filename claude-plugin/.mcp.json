@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "finny": {
+      "type": "http",
+      "url": "${FINNY_MCP_URL:-https://dashboard-five-jade-19.vercel.app/api/mcp}"
+    }
+  }
+}

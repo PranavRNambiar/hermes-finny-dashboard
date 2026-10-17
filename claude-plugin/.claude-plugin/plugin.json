@@ -1,0 +1,7 @@
+{
+  "name": "finny",
+  "version": "1.0.0",
+  "description": "Connects Claude to Finny, Pranav's personal spend tracker, through its read-only MCP server.",
+  "author": { "name": "Pranav Radhesh Nambiar" },
+  "keywords": ["finance", "spending", "budget", "mcp"]
+}

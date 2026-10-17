@@ -1,0 +1,16 @@
+# fly.toml — finny-agent background worker
+app = 'finny-agent'
+primary_region = 'sin'
+
+[build]
+
+[http_service]
+  internal_port = 8080
+  force_https = false
+  auto_stop_machines = 'off'
+  min_machines_running = 1
+
+[[vm]]
+  memory = '1024mb'
+  cpu_kind = 'shared'
+  cpus = 2

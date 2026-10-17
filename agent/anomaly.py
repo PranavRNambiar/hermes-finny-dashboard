@@ -56,9 +56,13 @@ def get_anomalies(report_date: str) -> list[dict]:
     )
     txns = result.data
 
-    # Check daily spike per currency
+    # Check daily spike per currency — exclude exempt (recurring) merchants from both total and avg
     for currency in ("SGD", "INR"):
-        daily_total = sum(t["amount"] for t in txns if t["currency"] == currency)
+        daily_total = sum(
+            t["amount"] for t in txns
+            if t["currency"] == currency
+            and (t.get("merchant") or "", t.get("card") or "") not in exempt
+        )
         if daily_total == 0:
             continue
 
