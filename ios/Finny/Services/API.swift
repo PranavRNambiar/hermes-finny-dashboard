@@ -117,6 +117,11 @@ struct API {
         let _: Ignored = try await send("PATCH", "transactions/\(API.encodeID(id))", body)
     }
 
+    /// The real SGD/INR the bank charged for a foreign-currency spend.
+    func setActualAmount(transaction id: String, _ amount: Double) async throws {
+        let _: Ignored = try await send("PATCH", "transactions/\(API.encodeID(id))", ["actual_amount": amount])
+    }
+
     /// Replace who owes what on a transaction. Empty list removes the split.
     func setSplits(transaction id: String, _ splits: [(name: String, amount: Double)]) async throws {
         let _: Ignored = try await send("PUT", "transactions/\(API.encodeID(id))/splits",

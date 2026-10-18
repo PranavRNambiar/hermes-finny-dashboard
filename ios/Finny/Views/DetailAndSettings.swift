@@ -10,7 +10,7 @@ struct TransactionDetailView: View {
     @State private var toast: String?
 
     enum EditSheet: String, Identifiable {
-        case tag, category, rename, split
+        case tag, category, rename, split, actual
         var id: String { rawValue }
     }
 
@@ -39,9 +39,18 @@ struct TransactionDetailView: View {
                             Text("Paid \(f)" + (t.fx_rate.map { " · \(Money.symbol(t.currency))\($0.formatted(.number.precision(.fractionLength(4)))) per \(t.orig_currency ?? "")" } ?? ""))
                                 .font(.system(size: 13, weight: .semibold, design: .rounded))
                             if t.card == "dbs" {
-                                Text("Estimated at the day's rate + DBS's ~0.5% margin; your statement may differ by a few cents")
+                                Text("Estimated at the day's rate + DBS's ~0.5% margin until you set the real amount")
                                     .font(.system(size: 11, design: .rounded)).multilineTextAlignment(.center)
                             }
+                            Button { sheet = .actual } label: {
+                                Label("Set actual \(t.currency) charged", systemImage: "pencil")
+                                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                                    .foregroundStyle(Palette.ink)
+                                    .padding(.horizontal, 12).padding(.vertical, 6)
+                                    .background(Palette.surface, in: .capsule)
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.top, 4)
                         }
                         .foregroundStyle(Palette.muted)
                     }
@@ -140,6 +149,9 @@ struct TransactionDetailView: View {
             } }
             case .split: SplitSheet(txn: t) { splits in await save(splits.isEmpty ? "Split removed" : "Split saved · your share updated") {
                 try await API(auth: auth).setSplits(transaction: t.id, splits)
+            } }
+            case .actual: ActualAmountSheet(txn: t) { amount in await save("Set to \(Money.format(amount, t.currency))") {
+                try await API(auth: auth).setActualAmount(transaction: t.id, amount)
             } }
             case .rename: RenameSheet(txn: t) { name in await save(name == nil ? "Name reset" : "Renamed everywhere, past and future") {
                 try await API(auth: auth).rename(merchant: t.raw_merchant ?? t.merchant ?? "", to: name)
@@ -484,6 +496,45 @@ private struct RenameSheet: View {
             }
         }
         .onAppear { name = txn.isRenamed ? (txn.merchant ?? "") : "" }
+    }
+}
+
+/// Foreign spends: once the bank posts the charge, record what it really took.
+private struct ActualAmountSheet: View {
+    let txn: Txn
+    let onSave: (Double) async -> String?
+    @State private var text = ""
+    @State private var applyAll = false
+    @FocusState private var focused: Bool
+
+    private var value: Double? { Double(text.replacingOccurrences(of: ",", with: "")) }
+
+    var body: some View {
+        EditSheetFrame(title: "Actual \(txn.currency) charged", merchant: txn.displayMerchant, applyAll: $applyAll, showApplyAll: false,
+                       saveTitle: "Save", onSave: { guard let v = value, v > 0 else { return "Enter an amount" }; return await onSave(v) }) {
+            VStack(alignment: .leading, spacing: 8) {
+                Eyebrow("\(Theme.cardLabel(txn.card)) took")
+                HStack(spacing: 6) {
+                    Text(Money.symbol(txn.currency)).font(.system(size: 20, weight: .bold, design: .rounded)).foregroundStyle(Palette.muted)
+                    TextField("0.00", text: $text)
+                        .keyboardType(.decimalPad)
+                        .focused($focused)
+                        .font(.system(size: 22, weight: .bold, design: .rounded).monospacedDigit())
+                }
+                .padding(.horizontal, 16)
+                .frame(height: 56)
+                .background(Palette.surface, in: .rect(cornerRadius: 16, style: .continuous))
+                Group {
+                    if let v = value, v > 0, let o = txn.orig_amount, o > 0 {
+                        Text("You paid \(txn.foreignLabel ?? ""). That's \(Money.symbol(txn.currency))\((v / o).formatted(.number.precision(.fractionLength(4)))) per \(txn.orig_currency ?? "").")
+                    } else {
+                        Text("You paid \(txn.foreignLabel ?? ""). Enter what was taken from your account once the charge posts (check your banking app).")
+                    }
+                }
+                .font(.caption).foregroundStyle(Palette.muted)
+            }
+        }
+        .onAppear { text = String(format: "%.2f", txn.fullAmount); focused = true }
     }
 }
 

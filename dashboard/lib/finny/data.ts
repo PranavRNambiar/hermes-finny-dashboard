@@ -311,8 +311,14 @@ export async function getTransaction(id: string): Promise<(Txn & { splits: any[]
     .from("transaction_splits")
     .select("id, share_amount, currency, status, settled_at, people(id, name)")
     .eq("transaction_id", id);
+  // Before supabase_fx.sql, the original amount is only in the bank email text.
+  const row: any = data;
+  if (!row.orig_currency) {
+    const f = foreignFromText(row.card, row.raw_desc);
+    if (f) Object.assign(row, f, { fx_rate: round2(Number(row.amount) / f.orig_amount * 1e4) / 1e4 });
+  }
   return {
-    ...cleanTxn(data),
+    ...cleanTxn(row),
     splits: (splits ?? []).map((s: any) => ({
       split_id: s.id,
       person_id: s.people?.id ?? null,
@@ -633,6 +639,35 @@ export async function setCategory(transactionId: string, category: string, apply
   const r = await db().from("transactions").update({ category }).eq("id", transactionId);
   if (r.error) throw new Error(r.error.message);
   return { category, updated: 1, future: false };
+}
+
+// ── Foreign spends ─────────────────────────────────────────
+// Same rules as agent/fx.py: DBS alerts state only the foreign amount ("Amount: EUR21.46"),
+// Wise says what it took ("You spent 22.93 EUR at Uber. This used 33.05 SGD").
+
+const HOME_CCY = ["SGD", "INR"];
+export function foreignFromText(card: string, text: string | null): { orig_currency: string; orig_amount: number } | null {
+  const flat = (text ?? "").replace(/\s+/g, " ");
+  const m = card === "wise" ? /spent\s+([\d,]+(?:\.\d+)?)\s+([A-Z]{3})/.exec(flat) : /Amount:\s*([A-Z]{3})\s?([\d,]+(?:\.\d+)?)/.exec(flat);
+  if (!m) return null;
+  const [ccy, num] = card === "wise" ? [m[2], m[1]] : [m[1], m[2]];
+  return HOME_CCY.includes(ccy) ? null : { orig_currency: ccy, orig_amount: Number(num.replace(/,/g, "")) };
+}
+
+/** The real SGD/INR the bank charged for a foreign spend (e.g. once a pending charge posts). */
+export async function setActualAmount(transactionId: string, amount: number) {
+  if (!(amount > 0) || amount > 1e7) throw new Error("amount must be positive");
+  const t = await getTransaction(transactionId);
+  if (!t) throw new Error("transaction not found");
+  if (!t.orig_currency || !t.orig_amount) throw new Error("only foreign-currency spends can be adjusted this way");
+  const value = round2(amount);
+  const patch: Record<string, unknown> = { amount: value };
+  if (await txnColumns().then((c) => c.includes("orig_currency"))) {
+    Object.assign(patch, { orig_currency: t.orig_currency, orig_amount: t.orig_amount, fx_rate: Math.round((value / t.orig_amount) * 1e6) / 1e6 });
+  }
+  const r = await db().from("transactions").update(patch).eq("id", transactionId);
+  if (r.error) throw new Error(r.error.message);
+  return { amount: value, orig_currency: t.orig_currency, orig_amount: t.orig_amount, fx_rate: value / t.orig_amount };
 }
 
 /** Custom display name for a merchant; applies to all past and future transactions. Empty resets it. */

@@ -7,7 +7,7 @@ import { api, CATEGORIES, cardLabel, displayMerchant, encId, foreignLabel, money
 import { useApp } from "./app";
 import { Amount, CategoryIcon, CategoryTag, Eyebrow, Kbd, Perf } from "./ui";
 
-type Panel = null | "tag" | "category" | "rename" | "split";
+type Panel = null | "tag" | "category" | "rename" | "split" | "actual";
 
 export function TxnDrawer() {
   const { txnId, closeTxn } = useApp();
@@ -71,7 +71,10 @@ export function TxnDrawer() {
               {foreignLabel(t) && (
                 <div className="mt-1 text-[13px] font-semibold text-muted">
                   Paid {foreignLabel(t)}{t.fx_rate ? ` · ${symbol(t.currency)}${Number(t.fx_rate).toFixed(4)} per ${t.orig_currency}` : ""}
-                  {t.card === "dbs" && <span className="block text-[11px] font-medium">Estimated at the day’s rate + DBS’s ~0.5% margin; your statement may differ by a few cents</span>}
+                  {t.card === "dbs" && <span className="block text-[11px] font-medium">Estimated at the day’s rate + DBS’s ~0.5% margin until you set the real amount</span>}
+                  <button onClick={() => setPanel("actual")} className="mt-1.5 inline-flex items-center gap-1 rounded-full bg-surface px-3 py-1 text-[12px] font-bold text-ink hover:bg-sunken">
+                    <Pencil size={11} /> Set actual {t.currency} charged
+                  </button>
                 </div>
               )}
               {t.split_with > 0 && <div className="mt-1 text-[13px] font-semibold text-mint">Your share · {money(t.total_amount, t.currency)} total, split with {t.split_with}</div>}
@@ -99,6 +102,7 @@ export function TxnDrawer() {
             {panel === "tag" && <TagPanel t={t} save={save} />}
             {panel === "category" && <CategoryPanel t={t} save={save} />}
             {panel === "rename" && <RenamePanel t={t} save={save} />}
+            {panel === "actual" && <ActualPanel t={t} save={save} />}
             {panel === "split" && <SplitPanel t={t} save={save} />}
 
             {!panel && !!t.splits?.length && (
@@ -231,6 +235,30 @@ function RenamePanel({ t, save }: { t: Txn; save: Save }) {
       <input ref={ref} value={name} onChange={(e) => setName(e.target.value)} placeholder={prettyMerchant(raw)}
         className="h-12 w-full rounded-2xl bg-canvas px-4 text-[16px] font-semibold text-ink outline-none placeholder:text-muted" />
       <div className="text-[12px] text-muted">Applies to every past and future transaction the bank sends as “{raw}”.</div>
+    </PanelFrame>
+  );
+}
+
+/** Foreign spends: once the bank posts the charge, record what it really took. */
+function ActualPanel({ t, save }: { t: Txn; save: Save }) {
+  const [value, setValue] = useState(t.total_amount.toFixed(2));
+  const [err, setErr] = useState<string | null>(null);
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => { ref.current?.focus(); ref.current?.select(); }, []);
+  const n = Number(value);
+  const rate = n > 0 && t.orig_amount ? n / Number(t.orig_amount) : null;
+  const submit = async () => setErr(await save(`Set to ${money(n, t.currency)}`, () => send("PATCH", `transactions/${encId(t.id)}`, { actual_amount: n })));
+  return (
+    <PanelFrame title={`Actual ${t.currency} charged`} onSubmit={submit} submitLabel="Save" error={err}>
+      <div className="flex h-12 items-center gap-2 rounded-2xl bg-canvas px-4">
+        <span className="font-bold text-muted">{symbol(t.currency)}</span>
+        <input ref={ref} type="number" step="0.01" min="0.01" value={value} onChange={(e) => setValue(e.target.value)}
+          className="tabular w-full bg-transparent text-[18px] font-bold text-ink outline-none" />
+      </div>
+      <div className="text-[12px] text-muted">
+        You paid {foreignLabel(t)}. Enter what {cardLabel(t.card)} took from your account once the charge posts (check your banking app).
+        {rate && <> That's {symbol(t.currency)}{rate.toFixed(4)} per {t.orig_currency}.</>}
+      </div>
     </PanelFrame>
   );
 }
