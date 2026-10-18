@@ -5,7 +5,7 @@ Idempotent:
 - fills orig_currency/orig_amount/fx_rate when those columns exist (supabase_fx.sql)
 Run on the agent box:  python backfill_fx.py [--dry-run] [--old-fee 0.0325] [--actual "MERCHANT=31.04"]
   --old-fee   also re-convert rows converted earlier with that fee (when the fee estimate changes)
-  --actual    set the real home amount the bank charged for a merchant's foreign spend
+  --actual    set the real home amount the bank charged, e.g. "AIRALO=20.78,ROAMLESS=23.10"
 """
 import sys
 
@@ -20,7 +20,8 @@ def _arg(name: str) -> str | None:
 
 
 OLD_FEE = float(_arg("--old-fee")) if _arg("--old-fee") else None
-ACTUAL = dict(a.rsplit("=", 1) for a in [_arg("--actual")] if a)
+# --actual "AIRALO=20.78,ROAMLESS=23.10": real amounts the bank charged, by merchant
+ACTUAL = dict(a.rsplit("=", 1) for a in (_arg("--actual") or "").split(",") if "=" in a)
 
 
 def main() -> None:
