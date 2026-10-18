@@ -1,35 +1,26 @@
-import type { Metadata } from "next";
-import localFont from "next/font/local";
+import type { Metadata, Viewport } from "next";
+import { Nunito } from "next/font/google";
+import { AppShell } from "@/components/app";
 import "./globals.css";
 
-const geistSans = localFont({
-  src: "./fonts/GeistVF.woff",
-  variable: "--font-geist-sans",
-  weight: "100 900",
-});
-const geistMono = localFont({
-  src: "./fonts/GeistMonoVF.woff",
-  variable: "--font-geist-mono",
-  weight: "100 900",
-});
+// Rounded type to match the iOS app's SF Pro Rounded (Safari uses ui-rounded natively).
+const rounded = Nunito({ subsets: ["latin"], variable: "--font-rounded", weight: ["400", "500", "600", "700", "800", "900"] });
 
 export const metadata: Metadata = {
   title: "Finny",
-  description: "Personal finance dashboard",
+  description: "Know where every dollar went.",
+  manifest: "/manifest.webmanifest",
+  appleWebApp: { capable: true, statusBarStyle: "default", title: "Finny" },
+  formatDetection: { telephone: false },
+};
+export const viewport: Viewport = {
+  themeColor: [{ media: "(prefers-color-scheme: light)", color: "#F0F1F5" }, { media: "(prefers-color-scheme: dark)", color: "#0B0F14" }],
 };
 
-export default function RootLayout({
-  children,
-}: Readonly<{
-  children: React.ReactNode;
-}>) {
+export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en">
-      <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
-      >
-        {children}
-      </body>
+    <html lang="en" className={rounded.variable}>
+      <body><AppShell>{children}</AppShell></body>
     </html>
   );
 }

@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 
 from parser import parse_transaction
 from categoriser import categorise
-from db import is_processed, mark_processed, insert_transaction, update_recurring_patterns
+from db import is_processed, mark_processed, insert_transaction, update_recurring_patterns, get_active_cards
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -23,15 +23,8 @@ log = logging.getLogger(__name__)
 
 SGT = timezone(timedelta(hours=8))
 
-CARDS = [
-    # Active
-    {"label_env": "GMAIL_LABEL_WISE",   "card": "wise",   "currency": "SGD"},
-    {"label_env": "GMAIL_LABEL_SCAPIA", "card": "scapia", "currency": "INR"},
-    {"label_env": "GMAIL_LABEL_AXIS",   "card": "axis",   "currency": "INR"},
-    # Pending labels — will be skipped until env vars are set
-    {"label_env": "GMAIL_LABEL_DBS",    "card": "dbs",    "currency": "SGD"},
-    {"label_env": "GMAIL_LABEL_OCBC",   "card": "ocbc",   "currency": "SGD"},
-]
+# Cards come from the cards table (managed via the dashboard), with a
+# GMAIL_LABEL_* env fallback — see db.get_active_cards().
 
 
 def get_imap_connection() -> imaplib.IMAP4_SSL:
@@ -82,7 +75,7 @@ def fetch_message_body(conn: imaplib.IMAP4_SSL, uid: str) -> str:
 
 def process_label(conn: imaplib.IMAP4_SSL, card_config: dict) -> tuple[int, int, int]:
     """Process all new emails for one card label. Returns (processed, skipped, failed)."""
-    label    = os.environ[card_config["label_env"]]
+    label    = card_config["label"]
     card     = card_config["card"]
     currency = card_config["currency"]
 
@@ -160,10 +153,7 @@ def main() -> None:
     total_processed = total_skipped = total_failed = 0
 
     try:
-        for card_config in CARDS:
-            if not os.environ.get(card_config["label_env"]):
-                log.debug("Skipping %s — label env var not set", card_config["card"].upper())
-                continue
+        for card_config in get_active_cards():
             p, s, f = process_label(conn, card_config)
             log.info("[POLL] %s — processed=%d skipped=%d failed=%d",
                      card_config["card"].upper(), p, s, f)

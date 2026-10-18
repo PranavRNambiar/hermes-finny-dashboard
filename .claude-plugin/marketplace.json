@@ -1,0 +1,17 @@
+{
+  "name": "finny",
+  "owner": {
+    "name": "Pranav Radhesh Nambiar"
+  },
+  "metadata": {
+    "description": "Finny: personal spend tracking for Claude."
+  },
+  "plugins": [
+    {
+      "name": "finny",
+      "source": "./claude-plugin",
+      "description": "Ask Claude about your Finny card spending: overviews, breakdowns, subscriptions and who owes you.",
+      "version": "1.0.0"
+    }
+  ]
+}

@@ -3,11 +3,15 @@ import { NextRequest, NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(req: NextRequest) {
-  const supabase = createClient(
+function getClient() {
+  return createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_KEY!
   );
+}
+
+export async function GET(req: NextRequest) {
+  const supabase = getClient();
   const { searchParams } = req.nextUrl;
   const card = searchParams.get("card");
   const currency = searchParams.get("currency");
@@ -37,4 +41,35 @@ export async function GET(req: NextRequest) {
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   return NextResponse.json({ transactions: data, total: count, page });
+}
+
+export async function PATCH(req: NextRequest) {
+  const supabase = getClient();
+  const body = await req.json();
+
+  if (body.action === "tag_one") {
+    const { error } = await supabase
+      .from("transactions")
+      .update({ user_tag: body.tag ?? null })
+      .eq("id", body.transaction_id);
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ ok: true });
+  }
+
+  if (body.action === "tag_merchant") {
+    const { error: e1 } = await supabase
+      .from("merchant_tags")
+      .upsert({ merchant: body.merchant, user_tag: body.tag }, { onConflict: "merchant" });
+    if (e1) return NextResponse.json({ error: e1.message }, { status: 500 });
+
+    const { error: e2 } = await supabase
+      .from("transactions")
+      .update({ user_tag: body.tag })
+      .eq("merchant", body.merchant);
+    if (e2) return NextResponse.json({ error: e2.message }, { status: 500 });
+
+    return NextResponse.json({ ok: true });
+  }
+
+  return NextResponse.json({ error: "Unknown action" }, { status: 400 });
 }

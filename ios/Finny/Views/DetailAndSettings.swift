@@ -1,0 +1,652 @@
+import SwiftUI
+
+/// Transaction detail laid out as a receipt, with tag / category / rename editing.
+struct TransactionDetailView: View {
+    @Environment(Auth.self) private var auth
+    @Environment(DataChanges.self) private var changes
+    let txn: Txn
+    @State private var full: Txn?
+    @State private var sheet: EditSheet?
+    @State private var toast: String?
+
+    enum EditSheet: String, Identifiable {
+        case tag, category, rename, split, actual
+        var id: String { rawValue }
+    }
+
+    var body: some View {
+        let t = full ?? txn
+        ScrollView {
+            VStack(spacing: 16) {
+                VStack(spacing: 14) {
+                    CategoryIcon(category: t.category, size: 64)
+                    Button { sheet = .rename } label: {
+                        HStack(spacing: 6) {
+                            Text(t.displayMerchant)
+                                .font(.display(22, .semibold))
+                                .foregroundStyle(Palette.ink)
+                                .multilineTextAlignment(.center)
+                            Image(systemName: "pencil").font(.system(size: 13, weight: .bold)).foregroundStyle(Palette.muted)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    if t.isRenamed, let raw = t.raw_merchant {
+                        Text("Bank name: \(raw)").font(.system(size: 11, design: .monospaced)).foregroundStyle(Palette.muted)
+                    }
+                    AmountText(amount: t.amount, currency: t.currency, size: 48, weight: .bold)
+                    if let f = t.foreignLabel {
+                        VStack(spacing: 2) {
+                            Text("Paid \(f)" + (t.fx_rate.map { " · \(Money.symbol(t.currency))\($0.formatted(.number.precision(.fractionLength(4)))) per \(t.orig_currency ?? "")" } ?? ""))
+                                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                            if t.card == "dbs" {
+                                Text("Estimated at the day's rate + DBS's ~0.5% margin until you set the real amount")
+                                    .font(.system(size: 11, design: .rounded)).multilineTextAlignment(.center)
+                            }
+                            Button { sheet = .actual } label: {
+                                Label("Set actual \(t.currency) charged", systemImage: "pencil")
+                                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                                    .foregroundStyle(Palette.ink)
+                                    .padding(.horizontal, 12).padding(.vertical, 6)
+                                    .background(Palette.surface, in: .capsule)
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.top, 4)
+                        }
+                        .foregroundStyle(Palette.muted)
+                    }
+                    if t.isSplit {
+                        Text("Your share · \(Money.format(t.fullAmount, t.currency)) total, split with \(t.split_with ?? 0)")
+                            .font(.system(size: 13, weight: .semibold, design: .rounded))
+                            .foregroundStyle(Palette.mint)
+                    }
+                    Button { sheet = .category } label: {
+                        HStack(spacing: 4) {
+                            CategoryTag(category: t.category)
+                            Image(systemName: "chevron.down").font(.system(size: 9, weight: .heavy)).foregroundStyle(Palette.muted)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    if t.anomaly_flagged {
+                        Label("Unusual for you", systemImage: "exclamationmark.circle.fill")
+                            .font(.system(size: 12, weight: .semibold, design: .rounded))
+                            .foregroundStyle(Palette.coral)
+                    }
+
+                    Perforation().padding(.vertical, 6)
+
+                    VStack(spacing: 14) {
+                        row("Date", t.date.formatted(.dateTime.weekday(.wide).day().month(.wide).year()))
+                        if let time = t.txn_time { row("Time", String(time.prefix(5))) }
+                        row("Card", Theme.cardLabel(t.card))
+                        HStack {
+                            Eyebrow("Tag")
+                            Spacer()
+                            Button { sheet = .tag } label: {
+                                Text(t.user_tag.map { "#\($0)" } ?? "+ Add tag")
+                                    .font(.system(size: 15, weight: .semibold, design: .rounded))
+                                    .foregroundStyle(Palette.mint)
+                            }
+                        }
+                    }
+                }
+                .padding(.horizontal, 22)
+                .padding(.top, 28)
+                .padding(.bottom, 34)
+                .frame(maxWidth: .infinity)
+                .background(ReceiptEdge(radius: 28).fill(Palette.surface))
+
+                HStack(spacing: 8) {
+                    action("Split", "person.2.fill") { sheet = .split }
+                    action("Tag", "number") { sheet = .tag }
+                    action("Category", "square.grid.2x2") { sheet = .category }
+                    action("Rename", "character.cursor.ibeam") { sheet = .rename }
+                }
+
+                if let splits = t.splits, !splits.isEmpty {
+                    Card(title: "Split with", trailing: "you: \(Money.format(t.amount, t.currency))") {
+                        ForEach(splits, id: \.self) { s in
+                            HStack {
+                                Text(s.person ?? "—").font(.system(size: 15, weight: .semibold, design: .rounded)).foregroundStyle(Palette.ink)
+                                Spacer()
+                                AmountText(amount: s.share_amount, currency: s.currency, size: 15)
+                                Image(systemName: s.status == "settled" ? "checkmark.circle.fill" : "clock.fill")
+                                    .foregroundStyle(s.status == "settled" ? Palette.mint : Palette.coral)
+                            }
+                        }
+                    }
+                }
+                if let raw = t.raw_desc, !raw.isEmpty {
+                    Card(title: "Original bank alert") {
+                        Text(raw)
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundStyle(Palette.inkSoft)
+                            .textSelection(.enabled)
+                    }
+                }
+            }
+            .padding(16)
+        }
+        .canvasBackground()
+        .navigationBarTitleDisplayMode(.inline)
+        .overlay(alignment: .bottom) {
+            if let toast {
+                Text(toast)
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Palette.surface)
+                    .padding(.horizontal, 16).padding(.vertical, 12)
+                    .background(Palette.ink, in: .capsule)
+                    .padding(.bottom, 24)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .sheet(item: $sheet) { which in
+            switch which {
+            case .tag: TagSheet(txn: t) { tag, all in await save(all ? "Tagged every \(t.displayMerchant) transaction, past and future" : "Tag saved") {
+                try await API(auth: auth).edit(transaction: t.id, tag: .some(tag), applyToMerchant: all)
+            } }
+            case .category: CategorySheet(txn: t) { cat, all in await save(all ? "All \(t.displayMerchant) transactions are now \(cat)" : "Category updated") {
+                try await API(auth: auth).edit(transaction: t.id, category: cat, applyToMerchant: all)
+            } }
+            case .split: SplitSheet(txn: t) { splits in await save(splits.isEmpty ? "Split removed" : "Split saved · your share updated") {
+                try await API(auth: auth).setSplits(transaction: t.id, splits)
+            } }
+            case .actual: ActualAmountSheet(txn: t) { amount in await save("Set to \(Money.format(amount, t.currency))") {
+                try await API(auth: auth).setActualAmount(transaction: t.id, amount)
+            } }
+            case .rename: RenameSheet(txn: t) { name in await save(name == nil ? "Name reset" : "Renamed everywhere, past and future") {
+                try await API(auth: auth).rename(merchant: t.raw_merchant ?? t.merchant ?? "", to: name)
+            } }
+            }
+        }
+        .task(id: changes.version) { full = try? await API(auth: auth).transaction(id: txn.id) }
+    }
+
+    /// Runs an edit; returns an error message for the sheet to show, or nil on success.
+    private func save(_ message: String, _ op: () async throws -> Void) async -> String? {
+        do {
+            try await op()
+            changes.bump()
+            withAnimation(.snappy) { toast = message }
+            Task {
+                try? await Task.sleep(for: .seconds(2.5))
+                withAnimation(.snappy) { toast = nil }
+            }
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
+    private func action(_ title: String, _ icon: String, _ tap: @escaping () -> Void) -> some View {
+        Button(action: tap) {
+            VStack(spacing: 6) {
+                Image(systemName: icon).font(.system(size: 16, weight: .semibold))
+                Text(title.uppercased()).font(.system(size: 10, weight: .bold, design: .rounded)).tracking(0.8)
+            }
+            .foregroundStyle(Palette.ink)
+            .frame(maxWidth: .infinity, minHeight: 64)
+            .background(Palette.surface, in: .rect(cornerRadius: 18, style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func row(_ label: String, _ value: String) -> some View {
+        HStack {
+            Eyebrow(label)
+            Spacer()
+            Text(value)
+                .font(.system(size: 15, weight: .semibold, design: .rounded))
+                .foregroundStyle(Palette.ink)
+        }
+    }
+}
+
+// MARK: - Edit sheets
+
+/// Shared chrome for the edit sheets: title, content, "every transaction from merchant" switch, save.
+private struct EditSheetFrame<Content: View>: View {
+    let title: String
+    let merchant: String
+    @Binding var applyAll: Bool
+    var showApplyAll = true
+    var saveTitle = "Save"
+    let onSave: () async -> String?
+    @ViewBuilder var content: Content
+    @Environment(\.dismiss) private var dismiss
+    @State private var saving = false
+    @State private var error: String?
+
+    private func submit() {
+        Task {
+            saving = true
+            error = await onSave()
+            saving = false
+            Feedback.play(error == nil ? .success : .warning)
+            if error == nil { dismiss() }
+        }
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    content
+                    if showApplyAll {
+                        Toggle(isOn: $applyAll) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Every \(merchant) transaction")
+                                    .font(.system(size: 15, weight: .semibold, design: .rounded)).foregroundStyle(Palette.ink)
+                                Text("Past ones now, and future ones automatically")
+                                    .font(.caption).foregroundStyle(Palette.muted)
+                            }
+                        }
+                        .tint(Palette.mint)
+                        .card(padding: 16)
+                    }
+                    if let error { Text(error).font(.footnote).foregroundStyle(Palette.coral) }
+                    Button(action: submit) {
+                        if saving { ProgressView().tint(Palette.surface) } else { Text(saveTitle) }
+                    }
+                    .buttonStyle(InkButtonStyle())
+                    .disabled(saving)
+                }
+                .padding(20)
+            }
+            .canvasBackground()
+            .navigationTitle(title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(saveTitle == "Save" ? "Save" : "Done") { submit() }
+                        .fontWeight(.bold)
+                        .disabled(saving)
+                }
+            }
+        }
+        .presentationDetents([.large])
+    }
+}
+
+private struct TagSheet: View {
+    @Environment(Auth.self) private var auth
+    let txn: Txn
+    let onSave: (String?, Bool) async -> String?
+    @State private var tag = ""
+    @State private var applyAll = true
+    @State private var suggestions: [String] = []
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        EditSheetFrame(title: "Tag", merchant: txn.displayMerchant, applyAll: $applyAll,
+                       saveTitle: tag.trimmingCharacters(in: .whitespaces).isEmpty ? "Remove tag" : "Save tag",
+                       onSave: { await onSave(tag.trimmingCharacters(in: .whitespaces).isEmpty ? nil : tag, applyAll) }) {
+            HStack(spacing: 8) {
+                Text("#").font(.display(22)).foregroundStyle(Palette.mint)
+                TextField("date-night, work, trip-goa…", text: $tag)
+                    .font(.system(size: 18, weight: .semibold, design: .rounded))
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .focused($focused)
+            }
+            .padding(.horizontal, 16)
+            .frame(height: 56)
+            .background(Palette.surface, in: .rect(cornerRadius: 16, style: .continuous))
+            if !suggestions.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Eyebrow("Your tags")
+                    WrapLayout(spacing: 8) {
+                        ForEach(suggestions, id: \.self) { s in
+                            Button { tag = s } label: {
+                                Text("#\(s)")
+                                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                                    .foregroundStyle(tag == s ? Palette.surface : Palette.ink)
+                                    .padding(.horizontal, 12).frame(height: 32)
+                                    .background(tag == s ? Palette.mint : Palette.surface, in: .capsule)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+            }
+        }
+        .task {
+            tag = txn.user_tag ?? ""
+            focused = txn.user_tag == nil
+            // Most-used first (the API sorts by count); keep the list short enough to see Save.
+            suggestions = Array(((try? await API(auth: auth).meta().tags.map(\.name)) ?? []).prefix(12))
+        }
+    }
+}
+
+private struct CategorySheet: View {
+    let txn: Txn
+    let onSave: (String, Bool) async -> String?
+    @State private var category = ""
+    @State private var applyAll = true
+
+    var body: some View {
+        EditSheetFrame(title: "Category", merchant: txn.displayMerchant, applyAll: $applyAll,
+                       onSave: { await onSave(category, applyAll) }) {
+            VStack(spacing: 0) {
+                ForEach(allCategories, id: \.self) { c in
+                    Button { category = c } label: {
+                        HStack(spacing: 12) {
+                            CategoryIcon(category: c, size: 34)
+                            Text(c).font(.system(size: 15, weight: .semibold, design: .rounded)).foregroundStyle(Palette.ink)
+                            Spacer()
+                            if category == c {
+                                Image(systemName: "checkmark.circle.fill").foregroundStyle(Palette.mint).font(.system(size: 20))
+                            }
+                        }
+                        .padding(.vertical, 8)
+                        .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                    if c != allCategories.last { Perforation().padding(.leading, 46) }
+                }
+            }
+            .card(padding: 14)
+        }
+        .onAppear { category = txn.category }
+    }
+}
+
+private struct SplitSheet: View {
+    @Environment(Auth.self) private var auth
+    let txn: Txn
+    let onSave: ([(name: String, amount: Double)]) async -> String?
+
+    struct Row: Identifiable { let id = UUID(); var name = ""; var amount = "" }
+    @State private var rows: [Row] = []
+    @State private var people: [Person] = []
+    @State private var unused = false
+    @FocusState private var focus: UUID?
+
+    private var total: Double { txn.fullAmount }
+    private var owed: Double { rows.compactMap { Double($0.amount.replacingOccurrences(of: ",", with: "")) }.reduce(0, +) }
+    private var myShare: Double { total - owed }
+    private var valid: [(name: String, amount: Double)] {
+        rows.compactMap { r in
+            guard let a = Double(r.amount.replacingOccurrences(of: ",", with: "")), a > 0, !r.name.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+            return (r.name.trimmingCharacters(in: .whitespaces), a)
+        }
+    }
+
+    var body: some View {
+        EditSheetFrame(title: "Split bill", merchant: txn.displayMerchant, applyAll: $unused, showApplyAll: false,
+                       saveTitle: rows.allSatisfy({ $0.name.isEmpty && $0.amount.isEmpty }) ? "Remove split" : "Save split",
+                       onSave: {
+                           if myShare < -0.005 { return "Others can't owe more than the total." }
+                           if rows.contains(where: { $0.name.trimmingCharacters(in: .whitespaces).isEmpty && (Double($0.amount) ?? 0) > 0 }) {
+                               return "Add a name for everyone who owes you."
+                           }
+                           return await onSave(valid)
+                       }) {
+            VStack(alignment: .leading, spacing: 4) {
+                Eyebrow("Your share")
+                AmountText(amount: max(0, myShare), currency: txn.currency, size: 40, weight: .bold,
+                           color: myShare < -0.005 ? Palette.coral : Palette.ink)
+                Text("of \(Money.format(total, txn.currency)) total · only your share counts in your spending")
+                    .font(.caption).foregroundStyle(Palette.muted)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Eyebrow("Split equally")
+                HStack(spacing: 8) {
+                    ForEach(2...6, id: \.self) { n in
+                        Button { splitEqually(n) } label: {
+                            Text("÷\(n)").font(.system(size: 14, weight: .bold, design: .rounded))
+                                .foregroundStyle(Palette.ink)
+                                .frame(maxWidth: .infinity, minHeight: 36)
+                                .background(Palette.surface, in: .capsule)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                Text("Counts you in: ÷3 means you + 2 others.").font(.caption2).foregroundStyle(Palette.muted)
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                Eyebrow("Who owes you")
+                ForEach($rows) { $row in
+                    HStack(spacing: 8) {
+                        TextField("Name", text: $row.name)
+                            .font(.system(size: 16, weight: .semibold, design: .rounded))
+                            .textInputAutocapitalization(.words)
+                            .focused($focus, equals: row.id)
+                        Text(Money.symbol(txn.currency)).foregroundStyle(Palette.muted)
+                        TextField("0.00", text: $row.amount)
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.trailing)
+                            .font(.system(size: 16, weight: .semibold, design: .rounded).monospacedDigit())
+                            .frame(width: 90)
+                        Button { rows.removeAll { $0.id == row.id } } label: {
+                            Image(systemName: "minus.circle.fill").foregroundStyle(Palette.muted)
+                        }
+                    }
+                    .padding(.horizontal, 14)
+                    .frame(height: 50)
+                    .background(Palette.surface, in: .rect(cornerRadius: 14, style: .continuous))
+                    if focus == row.id, !suggestions(for: row.name).isEmpty {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 6) {
+                                ForEach(suggestions(for: row.name)) { p in
+                                    Button { row.name = p.name } label: {
+                                        Text(p.name).font(.system(size: 13, weight: .semibold, design: .rounded))
+                                            .foregroundStyle(Palette.ink)
+                                            .padding(.horizontal, 12).frame(height: 30)
+                                            .background(Palette.mintSoft, in: .capsule)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                        }
+                    }
+                }
+                Button { let r = Row(); rows.append(r); focus = r.id } label: {
+                    Label("Add person", systemImage: "plus.circle.fill")
+                        .font(.system(size: 15, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Palette.mint)
+                }
+            }
+        }
+        .task {
+            let pending = (txn.splits ?? []).filter { $0.status != "settled" }
+            rows = pending.map { Row(name: $0.person ?? "", amount: String(format: "%.2f", $0.share_amount)) }
+            if rows.isEmpty { rows = [Row()] }
+            people = (try? await API(auth: auth).people()) ?? []
+        }
+    }
+
+    private func suggestions(for text: String) -> [Person] {
+        let q = text.lowercased()
+        return Array(people.filter { q.isEmpty || $0.name.lowercased().contains(q) }.filter { $0.name != text }.prefix(8))
+    }
+
+    /// Everyone (you included) pays total/n; fills or trims the rows to n-1 people.
+    private func splitEqually(_ n: Int) {
+        let each = (total / Double(n) * 100).rounded() / 100
+        while rows.count < n - 1 { rows.append(Row()) }
+        if rows.count > n - 1 { rows = Array(rows.prefix(n - 1)) }
+        for i in rows.indices { rows[i].amount = String(format: "%.2f", each) }
+    }
+}
+
+private struct RenameSheet: View {
+    let txn: Txn
+    let onSave: (String?) async -> String?
+    @State private var name = ""
+    @State private var applyAll = true
+
+    var body: some View {
+        EditSheetFrame(title: "Rename merchant", merchant: txn.displayMerchant, applyAll: $applyAll, showApplyAll: false,
+                       saveTitle: name.trimmingCharacters(in: .whitespaces).isEmpty ? "Reset to bank name" : "Rename",
+                       onSave: { await onSave(name.trimmingCharacters(in: .whitespaces).isEmpty ? nil : name) }) {
+            VStack(alignment: .leading, spacing: 8) {
+                Eyebrow("Show it as")
+                TextField(prettyMerchant(txn.raw_merchant ?? txn.merchant ?? ""), text: $name)
+                    .font(.system(size: 18, weight: .semibold, design: .rounded))
+                    .padding(.horizontal, 16)
+                    .frame(height: 56)
+                    .background(Palette.surface, in: .rect(cornerRadius: 16, style: .continuous))
+                Text("Applies to every past and future transaction the bank sends as “\(txn.raw_merchant ?? txn.merchant ?? "")”. Leave empty to go back to the bank's name.")
+                    .font(.caption)
+                    .foregroundStyle(Palette.muted)
+            }
+        }
+        .onAppear { name = txn.isRenamed ? (txn.merchant ?? "") : "" }
+    }
+}
+
+/// Foreign spends: once the bank posts the charge, record what it really took.
+private struct ActualAmountSheet: View {
+    let txn: Txn
+    let onSave: (Double) async -> String?
+    @State private var text = ""
+    @State private var applyAll = false
+    @FocusState private var focused: Bool
+
+    private var value: Double? { Double(text.replacingOccurrences(of: ",", with: "")) }
+
+    var body: some View {
+        EditSheetFrame(title: "Actual \(txn.currency) charged", merchant: txn.displayMerchant, applyAll: $applyAll, showApplyAll: false,
+                       saveTitle: "Save", onSave: { guard let v = value, v > 0 else { return "Enter an amount" }; return await onSave(v) }) {
+            VStack(alignment: .leading, spacing: 8) {
+                Eyebrow("\(Theme.cardLabel(txn.card)) took")
+                HStack(spacing: 6) {
+                    Text(Money.symbol(txn.currency)).font(.system(size: 20, weight: .bold, design: .rounded)).foregroundStyle(Palette.muted)
+                    TextField("0.00", text: $text)
+                        .keyboardType(.decimalPad)
+                        .focused($focused)
+                        .font(.system(size: 22, weight: .bold, design: .rounded).monospacedDigit())
+                }
+                .padding(.horizontal, 16)
+                .frame(height: 56)
+                .background(Palette.surface, in: .rect(cornerRadius: 16, style: .continuous))
+                Group {
+                    if let v = value, v > 0, let o = txn.orig_amount, o > 0 {
+                        Text("You paid \(txn.foreignLabel ?? ""). That's \(Money.symbol(txn.currency))\((v / o).formatted(.number.precision(.fractionLength(4)))) per \(txn.orig_currency ?? "").")
+                    } else {
+                        Text("You paid \(txn.foreignLabel ?? ""). Enter what was taken from your account once the charge posts (check your banking app).")
+                    }
+                }
+                .font(.caption).foregroundStyle(Palette.muted)
+            }
+        }
+        .onAppear { text = String(format: "%.2f", txn.fullAmount); focused = true }
+    }
+}
+
+struct SettingsView: View {
+    @Environment(Auth.self) private var auth
+    @State private var meta: Meta?
+    @State private var confirmSignOut = false
+    @AppStorage("haptics") private var haptics = true
+    @AppStorage("sounds") private var sounds = true
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    ScreenHeader(eyebrow: "Finny · v1.0", title: "Settings")
+
+                    Card(title: "Connected to") {
+                        HStack(spacing: 12) {
+                            Image(systemName: "server.rack")
+                                .font(.system(size: 16, weight: .semibold))
+                                .foregroundStyle(Palette.mint)
+                                .frame(width: 40, height: 40)
+                                .background(Palette.mintSoft, in: .rect(cornerRadius: 13, style: .continuous))
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(auth.serverURL?.host() ?? "—").font(.system(size: 15, weight: .semibold, design: .rounded)).foregroundStyle(Palette.ink)
+                                Text("Read-only").font(.caption).foregroundStyle(Palette.muted)
+                            }
+                            Spacer()
+                            if let base = auth.serverURL {
+                                Link(destination: base) {
+                                    Image(systemName: "arrow.up.right").font(.system(size: 13, weight: .bold)).foregroundStyle(Palette.ink)
+                                        .frame(width: 34, height: 34).background(Palette.sunken, in: .circle)
+                                }
+                            }
+                        }
+                    }
+
+                    if let meta {
+                        Card(title: "Cards") {
+                            VStack(spacing: 0) {
+                                ForEach(meta.cards) { c in
+                                    HStack {
+                                        Text(c.label).font(.system(size: 15, weight: .semibold, design: .rounded))
+                                            .foregroundStyle(c.active ? Palette.ink : Palette.muted)
+                                        Spacer()
+                                        Text(Money.symbol(c.currency) + " " + c.currency)
+                                            .font(.system(size: 11, weight: .bold, design: .rounded)).tracking(0.8)
+                                            .foregroundStyle(Palette.inkSoft)
+                                            .padding(.horizontal, 8).padding(.vertical, 4)
+                                            .background(Palette.sunken, in: .capsule)
+                                    }
+                                    .padding(.vertical, 11)
+                                    if c.id != meta.cards.last?.id { Perforation() }
+                                }
+                            }
+                        }
+                        if let fx = meta.fx {
+                            Card(title: "Exchange rate", trailing: fx.date) {
+                                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                                    AmountText(amount: 1, currency: "SGD", size: 22)
+                                    Text("=").font(.display(20)).foregroundStyle(Palette.muted)
+                                    AmountText(amount: fx.rate, currency: "INR", size: 22)
+                                }
+                                Text("ECB reference rate. Finny never adds SGD and INR together unless you ask.")
+                                    .font(.caption).foregroundStyle(Palette.muted)
+                            }
+                        }
+                    }
+
+                    Card(title: "Feel") {
+                        Toggle(isOn: $haptics) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Haptics").font(.system(size: 15, weight: .semibold, design: .rounded)).foregroundStyle(Palette.ink)
+                                Text("Light taps on switches, saves and tabs").font(.caption).foregroundStyle(Palette.muted)
+                            }
+                        }
+                        Perforation()
+                        Toggle(isOn: $sounds) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Click sounds").font(.system(size: 15, weight: .semibold, design: .rounded)).foregroundStyle(Palette.ink)
+                                Text("Soft clicks and a pop when something saves. Follows the silent switch.").font(.caption).foregroundStyle(Palette.muted)
+                            }
+                        }
+                    }
+                    .tint(Palette.mint)
+                    .onChange(of: haptics) { _, _ in Feedback.play(.select) }
+                    .onChange(of: sounds) { _, on in if on { Feedback.play(.select) } }
+
+                    Button { confirmSignOut = true } label: {
+                        Text("Sign out")
+                            .font(.system(size: 15, weight: .bold, design: .rounded))
+                            .foregroundStyle(Palette.coral)
+                            .frame(maxWidth: .infinity, minHeight: 52)
+                            .background(Palette.surface, in: .rect(cornerRadius: 16, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+
+                    Text("Cards, tags and splits are managed from the web dashboard and the Telegram bot.")
+                        .font(.caption)
+                        .foregroundStyle(Palette.muted)
+                        .frame(maxWidth: .infinity)
+                        .multilineTextAlignment(.center)
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 24)
+            }
+            .canvasBackground()
+            .toolbar(.hidden, for: .navigationBar)
+            .confirmationDialog("Sign out of Finny?", isPresented: $confirmSignOut) {
+                Button("Sign out", role: .destructive) { auth.signOut() }
+            }
+            .task { meta = try? await API(auth: auth).meta() }
+        }
+    }
+}
