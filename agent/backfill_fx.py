@@ -3,14 +3,24 @@
 Idempotent:
 - converts a row only while its amount still equals the foreign number (i.e. it was never converted)
 - fills orig_currency/orig_amount/fx_rate when those columns exist (supabase_fx.sql)
-Run on the agent box:  python backfill_fx.py [--dry-run]
+Run on the agent box:  python backfill_fx.py [--dry-run] [--old-fee 0.0325] [--actual "MERCHANT=31.04"]
+  --old-fee   also re-convert rows converted earlier with that fee (when the fee estimate changes)
+  --actual    set the real home amount the bank charged for a merchant's foreign spend
 """
 import sys
 
 from db import get_client
-from fx import HOME, apply, foreign
+from fx import HOME, apply, foreign, rate
 
 DRY = "--dry-run" in sys.argv
+
+
+def _arg(name: str) -> str | None:
+    return sys.argv[sys.argv.index(name) + 1] if name in sys.argv else None
+
+
+OLD_FEE = float(_arg("--old-fee")) if _arg("--old-fee") else None
+ACTUAL = dict(a.rsplit("=", 1) for a in [_arg("--actual")] if a)
 
 
 def main() -> None:
@@ -33,13 +43,20 @@ def main() -> None:
         f = foreign(t["card"], home, t.get("raw_desc") or "")
         if not f:
             continue
-        if has_cols and t.get("orig_currency"):
+        if has_cols and t.get("orig_currency") and OLD_FEE is None and not ACTUAL:
             continue  # already done
         unconverted = abs(float(t["amount"]) - f["orig_amount"]) < 0.005 and f.get("charged") is None
         parsed = {"amount": t["amount"], "currency": t["currency"], "txn_date": t["txn_date"]}
         apply(parsed, t["card"], home, t.get("raw_desc") or "")
+        if OLD_FEE is not None and f.get("charged") is None and not unconverted:
+            old = round(f["orig_amount"] * rate(f["orig_currency"], home, t["txn_date"]) * (1 + OLD_FEE), 2)
+            unconverted = abs(float(t["amount"]) - old) < 0.015   # converted with the old estimate → redo
+        for name, amt in ACTUAL.items():
+            if name.lower() in (t["merchant"] or "").lower():
+                parsed.update(amount=float(amt), fx_rate=round(float(amt) / f["orig_amount"], 6))
+                unconverted = True
         patch = {}
-        if unconverted:
+        if unconverted and abs(float(t["amount"]) - parsed["amount"]) >= 0.005:
             patch.update(amount=parsed["amount"], currency=home)
         if has_cols:
             patch.update(orig_currency=parsed["orig_currency"], orig_amount=parsed["orig_amount"], fx_rate=parsed["fx_rate"])

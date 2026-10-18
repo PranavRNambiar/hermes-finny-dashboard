@@ -39,7 +39,7 @@ struct TransactionDetailView: View {
                             Text("Paid \(f)" + (t.fx_rate.map { " · \(Money.symbol(t.currency))\($0.formatted(.number.precision(.fractionLength(4)))) per \(t.orig_currency ?? "")" } ?? ""))
                                 .font(.system(size: 13, weight: .semibold, design: .rounded))
                             if t.card == "dbs" {
-                                Text("Estimated at the day's rate + DBS's 3.25% fee; your statement may differ slightly")
+                                Text("Estimated at the day's rate + DBS's ~0.5% margin; your statement may differ by a few cents")
                                     .font(.system(size: 11, design: .rounded)).multilineTextAlignment(.center)
                             }
                         }

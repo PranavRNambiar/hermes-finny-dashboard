@@ -3,8 +3,9 @@ card's home currency (SGD/INR), which is what every total adds up.
 
 - Wise says what it took: "You spent 22.93 EUR at Uber. This used 33.05 SGD" → amount 33.05.
 - DBS card alerts only state the foreign amount ("Amount: EUR21.46"), so we convert at the
-  ECB rate for that day plus the card's foreign-transaction fee (DBS: up to 3.25%). The bank's
-  final figure can differ by a little; the original amount is kept alongside.
+  ECB rate for that day plus the card's markup. Measured on a real DBS charge (EUR 21.46 → S$31.04,
+  Oct 2026): DBS's rate was ~0.47% over ECB with no 3.25% fee (multi-currency account), so 0.5%.
+  The bank's final figure can differ by a few cents; the original amount is kept alongside.
 """
 import logging
 import re
@@ -15,7 +16,7 @@ import httpx
 log = logging.getLogger(__name__)
 
 HOME = ("SGD", "INR")
-FX_FEE = {"dbs": 0.0325}   # card → foreign transaction fee charged on top of the rate
+FX_FEE = {"dbs": 0.005}    # card → markup over the ECB rate (DBS multi-currency: FX spread only, no 3.25% fee)
 
 _CCY = r"([A-Z]{3})"
 _NUM = r"([\d,]+(?:\.\d+)?)"

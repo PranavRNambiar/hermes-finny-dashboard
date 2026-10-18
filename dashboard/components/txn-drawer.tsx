@@ -71,7 +71,7 @@ export function TxnDrawer() {
               {foreignLabel(t) && (
                 <div className="mt-1 text-[13px] font-semibold text-muted">
                   Paid {foreignLabel(t)}{t.fx_rate ? ` · ${symbol(t.currency)}${Number(t.fx_rate).toFixed(4)} per ${t.orig_currency}` : ""}
-                  {t.card === "dbs" && <span className="block text-[11px] font-medium">Estimated at the day’s rate + DBS’s 3.25% fee; your statement may differ slightly</span>}
+                  {t.card === "dbs" && <span className="block text-[11px] font-medium">Estimated at the day’s rate + DBS’s ~0.5% margin; your statement may differ by a few cents</span>}
                 </div>
               )}
               {t.split_with > 0 && <div className="mt-1 text-[13px] font-semibold text-mint">Your share · {money(t.total_amount, t.currency)} total, split with {t.split_with}</div>}
