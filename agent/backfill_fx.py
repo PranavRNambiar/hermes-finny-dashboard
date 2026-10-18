@@ -60,13 +60,18 @@ def main() -> None:
         if unconverted and abs(float(t["amount"]) - parsed["amount"]) >= 0.005:
             patch.update(amount=parsed["amount"], currency=home)
         if has_cols:
-            patch.update(orig_currency=parsed["orig_currency"], orig_amount=parsed["orig_amount"], fx_rate=parsed["fx_rate"])
+            # Keep the stored amount (it may be the real charge you entered); the rate follows from it.
+            final = parsed["amount"] if unconverted else float(t["amount"])
+            patch.update(orig_currency=parsed["orig_currency"], orig_amount=parsed["orig_amount"],
+                         fx_rate=round(final / parsed["orig_amount"], 6))
         if not patch:
             continue
         splits = db.table("transaction_splits").select("id").eq("transaction_id", t["id"]).execute().data
         note = "  (has splits: shares were entered in the old amount — check them)" if splits and unconverted else ""
-        print(f"{t['txn_date']} {t['card']:6} {t['merchant'][:28]:28} {f['orig_currency']} {f['orig_amount']:.2f}: "
-              f"{t['currency']} {float(t['amount']):.2f} → {home} {parsed['amount']:.2f}{note}")
+        head = f"{t['txn_date']} {t['card']:6} {t['merchant'][:28]:28} {f['orig_currency']} {f['orig_amount']:.2f}: "
+        what = (f"{t['currency']} {float(t['amount']):.2f} → {home} {patch['amount']:.2f}{note}" if "amount" in patch
+                else f"keeps {t['currency']} {float(t['amount']):.2f}, records original + rate {patch.get('fx_rate')}")
+        print(head + what)
         if not DRY:
             db.table("transactions").update(patch).eq("id", t["id"]).execute()
         fixed += 1
